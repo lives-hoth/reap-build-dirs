@@ -35,6 +35,9 @@ recreates it.
   state that makes your daily rebuilds fast. The main checkout is identified by
   asking git, not by path, so it works with any worktree layout.
 - **Anything written in the last `REAP_AGE_DAYS` days**, including builds in progress.
+- **Anything it can't fully inspect.** If checking a dir's age fails, for example
+  because a subfolder is unreadable, the dir is kept. An invalid setting stops the
+  run before anything is deleted.
 - **Terraform modules with local state** (`terraform.tfstate` or `terraform.tfstate.d/`).
 - **`.terraform` dirs with a non-default workspace selected.** Re-running
   `terraform init` would quietly switch back to `default`, and a later `apply` could
@@ -81,7 +84,7 @@ journalctl --user -u reap-build-dirs     # the log
 |---|---|---|
 | `REAP_ROOTS` | `$HOME/git` | Colon-separated dirs where your checkouts live |
 | `REAP_TEMP_ROOTS` | `/tmp:$TMPDIR` | Colon-separated temp dirs, searched 4 levels deep |
-| `REAP_AGE_DAYS` | `3` | Days without writes before a dir is deleted |
+| `REAP_AGE_DAYS` | `3` | Days without writes before a dir is deleted (a whole number, at least 1) |
 | `REAP_TERRAFORM` | `1` | Set to `0` to leave `.terraform` dirs alone |
 | `REAP_SHARED_BUILD_DIR` | unset | A cargo `build-dir` shared across workspaces |
 | `REAP_SHARED_CAP_GB` | `100` | Size at which the shared build-dir is wiped |

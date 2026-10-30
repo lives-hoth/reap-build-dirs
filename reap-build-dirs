@@ -22,7 +22,7 @@ Environment:
   REAP_ROOTS             colon-separated dirs to search  (default: $HOME/git)
   REAP_TEMP_ROOTS        colon-separated temp dirs, searched 4 levels deep
                          (default: /tmp and $TMPDIR)
-  REAP_AGE_DAYS          idle days before a dir is deleted  (default: 3)
+  REAP_AGE_DAYS          idle days before a dir is deleted, at least 1  (default: 3)
   REAP_TERRAFORM         0 to skip .terraform dirs  (default: 1)
   REAP_SHARED_BUILD_DIR  a cargo build-dir shared across workspaces  (default: unset)
   REAP_SHARED_CAP_GB     size that triggers wiping it  (default: 100)
@@ -46,10 +46,20 @@ TERRAFORM=${REAP_TERRAFORM:-1}
 SHARED_DIR=${REAP_SHARED_BUILD_DIR:-}
 SHARED_CAP_GB=${REAP_SHARED_CAP_GB:-100}
 
+die() { echo "reap-build-dirs: $*" >&2; exit 2; }
+# A bad age reaches find as an invalid -mtime, which would make every dir look
+# idle. Refuse to start instead.
+case "$AGE_DAYS" in ''|*[!0-9]*|0) die "REAP_AGE_DAYS must be a whole number of days, at least 1 (got '$AGE_DAYS')" ;; esac
+case "$SHARED_CAP_GB" in ''|*[!0-9]*) die "REAP_SHARED_CAP_GB must be a whole number (got '$SHARED_CAP_GB')" ;; esac
+
 log() { echo "$(date '+%F %T') $*"; }
 gib() { awk -v k="$1" 'BEGIN { printf "%.1f", k / 1048576 }'; }
 free_gib() { gib "$(df -Pk "$HOME" | awk 'NR==2 {print $4}')"; }
-recent() { [ -n "$(find "$@" -mtime -"$AGE_DAYS" -print -quit 2>/dev/null)" ]; }
+recent() { # true if anything was written recently, or if find can't tell
+  local out
+  out=$(find "$@" -mtime -"$AGE_DAYS" -print -quit 2>/dev/null) || return 0
+  [ -n "$out" ]
+}
 each_dir() { # split a colon list, keeping only existing dirs
   local IFS=:
   for r in $1; do [ -n "$r" ] && [ -d "$r" ] && (cd "$r" && pwd -P); done | sort -u

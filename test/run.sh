@@ -81,6 +81,35 @@ kept git/repo-review/workspace/.terraform
 gone tmp/job-build
 kept tmp/a/b/c/d/e/too-deep
 
+echo "# invalid settings stop the run before anything is deleted"
+cargo_dir git/repo-review/fresh-build CACHEDIR.TAG              # written just now
+for bad in 3d three -1 0; do
+  if REAP_AGE_DAYS="$bad" run >/dev/null 2>&1; then
+    fail "REAP_AGE_DAYS='$bad' should exit nonzero"
+  fi
+done
+if [ -e "$fx/git/repo-review/fresh-build" ]; then ok "rejects bad REAP_AGE_DAYS"; else fail "bad REAP_AGE_DAYS deleted a fresh dir"; fi
+if REAP_SHARED_CAP_GB=lots run >/dev/null 2>&1; then fail "REAP_SHARED_CAP_GB=lots should exit nonzero"; else ok "rejects bad REAP_SHARED_CAP_GB"; fi
+
+echo "# a dir whose age can't be checked is kept"
+if [ "$(id -u)" = 0 ]; then
+  echo "skip  (root can read everything, so this case can't be set up)"
+else
+  cargo_dir git/repo-review/unreadable CACHEDIR.TAG
+  mkdir "$fx/git/repo-review/unreadable/locked"
+  age git/repo-review/unreadable
+  chmod 000 "$fx/git/repo-review/unreadable/locked"
+  # Dry run: rm can't remove an unreadable folder either, so a real run would
+  # keep the dir even if the script wrongly tried to delete it.
+  run --dry-run > "$fx/out.log"
+  chmod 755 "$fx/git/repo-review/unreadable/locked"
+  if grep -q 'repo-review/unreadable' "$fx/out.log"; then
+    fail "tried to delete a dir whose age couldn't be checked"
+  else
+    ok "keeps a dir whose age can't be checked"
+  fi
+fi
+
 echo "# shared build-dir"
 mkdir -p "$fx/shared/debug/deps"
 : > "$fx/shared/.rustc_info.json"
