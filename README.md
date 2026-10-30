@@ -133,13 +133,16 @@ inherits it and opts back out of sharing too.
 
 ## Testing
 
+`tests/spec.rs` is the specification: one test per rule of what is deleted and what
+is kept. Each test builds a throwaway tree of git worktrees, cargo build dirs and
+Terraform modules in a temporary directory and checks what a run leaves behind.
+
 ```sh
-./test/run.sh
+cargo test                                        # the binary
+REAP_BIN="$PWD/reap-build-dirs" cargo test        # the bash script, same spec
 ```
 
-The tests build a fixture tree in a temporary directory (git worktrees, fake cargo
-build dirs, Terraform modules with and without local state) and check what each run
-keeps and deletes. They need no network, cargo or terraform.
+Ignored tests describe decided behavior that isn't implemented yet.
 
 ## License
 

@@ -18,6 +18,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: shellcheck
         if: runner.os == 'Linux'
-        run: shellcheck reap-build-dirs test/run.sh
-      - name: test
-        run: ./test/run.sh
+        run: shellcheck reap-build-dirs
+      - name: spec, against the binary
+        run: cargo test --locked
+      # Holds the bash script to the same spec while it is being replaced.
+      - name: spec, against the bash script
+        run: REAP_BIN="$PWD/reap-build-dirs" cargo test --locked
