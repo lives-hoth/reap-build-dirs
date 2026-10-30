@@ -1,0 +1,10 @@
+[Unit]
+Description=Delete stale cargo and Terraform build output
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/reap-build-dirs
+Nice=19
+IOSchedulingClass=idle
+# Settings, for example:
+# Environment=REAP_SHARED_BUILD_DIR=%h/.cargo/build-shared

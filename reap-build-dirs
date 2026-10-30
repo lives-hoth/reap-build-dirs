@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# reap-build-dirs: delete stale Rust and Terraform build output from throwaway
+# worktrees and temp dirs, so many parallel checkouts can't fill the disk.
+#
+# Usage: reap-build-dirs [-n|--dry-run] [-h|--help]
+# Configuration is by environment variable; see --help.
+set -u
+
+usage() {
+  cat <<'EOF'
+Usage: reap-build-dirs [-n|--dry-run] [-h|--help]
+
+Deletes build output nothing has written to for REAP_AGE_DAYS:
+  - cargo build dirs under REAP_ROOTS and the temp dirs
+  - .terraform dirs in linked git worktrees under REAP_ROOTS
+and wipes REAP_SHARED_BUILD_DIR once it grows past REAP_SHARED_CAP_GB.
+
+Never touched: a main checkout's own target/ and .terraform/, any module with
+local Terraform state, any .terraform with a non-default workspace selected.
+
+Environment:
+  REAP_ROOTS             colon-separated dirs to search  (default: $HOME/git)
+  REAP_TEMP_ROOTS        colon-separated temp dirs, searched 4 levels deep
+                         (default: /tmp and $TMPDIR)
+  REAP_AGE_DAYS          idle days before a dir is deleted  (default: 3)
+  REAP_TERRAFORM         0 to skip .terraform dirs  (default: 1)
+  REAP_SHARED_BUILD_DIR  a cargo build-dir shared across workspaces  (default: unset)
+  REAP_SHARED_CAP_GB     size that triggers wiping it  (default: 100)
+  DRY_RUN                1 to report without deleting  (same as --dry-run)
+EOF
+}
+
+DRY_RUN=${DRY_RUN:-0}
+for arg in "$@"; do
+  case "$arg" in
+    -n|--dry-run) DRY_RUN=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "reap-build-dirs: unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+AGE_DAYS=${REAP_AGE_DAYS:-3}
+ROOTS=${REAP_ROOTS:-$HOME/git}
+TEMP_ROOTS=${REAP_TEMP_ROOTS:-/tmp:${TMPDIR:-}}
+TERRAFORM=${REAP_TERRAFORM:-1}
+SHARED_DIR=${REAP_SHARED_BUILD_DIR:-}
+SHARED_CAP_GB=${REAP_SHARED_CAP_GB:-100}
+
+log() { echo "$(date '+%F %T') $*"; }
+gib() { awk -v k="$1" 'BEGIN { printf "%.1f", k / 1048576 }'; }
+free_gib() { gib "$(df -Pk "$HOME" | awk 'NR==2 {print $4}')"; }
+recent() { [ -n "$(find "$@" -mtime -"$AGE_DAYS" -print -quit 2>/dev/null)" ]; }
+each_dir() { # split a colon list, keeping only existing dirs
+  local IFS=:
+  for r in $1; do [ -n "$r" ] && [ -d "$r" ] && (cd "$r" && pwd -P); done | sort -u
+}
+
+reap() { # $1 = dir, $2 = reason
+  local kb; kb=$(du -sk "$1" 2>/dev/null | cut -f1)
+  if [ "$DRY_RUN" = 1 ]; then
+    log "would delete $(gib "${kb:-0}") GiB  $1  ($2)"
+  elif rm -rf "$1"; then
+    log "deleted $(gib "${kb:-0}") GiB  $1  ($2)"
+  else
+    log "FAILED  $1"
+  fi
+}
+
+# A linked worktree has its own git dir; a main checkout's git dir is the
+# repo's common dir. Prints nothing outside a git repo.
+checkout_kind() {
+  local gd common
+  gd=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 0
+  common=$(cd "$1" && cd "$(git rev-parse --git-common-dir)" && pwd -P)
+  [ "$gd" = "$common" ] && echo main || echo linked
+}
+
+# Cargo writes CACHEDIR.TAG and/or .rustc_info.json at a build dir's root, and
+# some dirs have only one, so search for both. Matching the name `target` would
+# miss custom build dirs and hit crate sources that contain a `target/` module.
+cargo_candidates() { # $1 = root, $2.. = extra find args
+  local root=$1; shift
+  find "$root" "$@" \( -name .git -o -name node_modules -o -name deps -o -name incremental \) -prune \
+    -o \( -name CACHEDIR.TAG -o -name .rustc_info.json \) -print 2>/dev/null \
+    | grep -v '/registry/src/' | while IFS= read -r f; do dirname "$f"; done
+}
+
+shared_real=""
+[ -n "$SHARED_DIR" ] && [ -d "$SHARED_DIR" ] && shared_real=$(cd "$SHARED_DIR" && pwd -P)
+
+log "start (free $(free_gib) GiB, age ${AGE_DAYS}d, dry_run=$DRY_RUN)"
+
+# Shortest paths first, so a nested build dir is skipped once its parent is gone.
+{
+  each_dir "$ROOTS" | while IFS= read -r r; do cargo_candidates "$r"; done
+  each_dir "$TEMP_ROOTS" | while IFS= read -r r; do cargo_candidates "$r" -maxdepth 4; done
+} | sort -u | awk '{ print length, $0 }' | sort -n | cut -d' ' -f2- | while IFS= read -r d; do
+  [ -d "$d" ] || continue
+  case "$d" in "$shared_real"|"$shared_real"/*) [ -n "$shared_real" ] && continue ;; esac
+  { [ -d "$d/debug/deps" ] || [ -d "$d/release/deps" ]; } || continue
+  if [ "$(basename "$d")" = target ] && [ "$(checkout_kind "$(dirname "$d")")" = main ]; then
+    continue                                    # main checkout's incremental state
+  fi
+  recent "$d" && continue
+  reap "$d" "cargo, idle ${AGE_DAYS}d+"
+done
+
+# .terraform holds downloaded providers and backend settings; with remote state,
+# `terraform init` restores it. Only linked worktrees are touched.
+if [ "$TERRAFORM" = 1 ]; then
+  each_dir "$ROOTS" | while IFS= read -r r; do
+    find "$r" \( -name .git -o -name node_modules \) -prune -o -type d -name .terraform -prune -print 2>/dev/null
+  done | while IFS= read -r d; do
+    m=$(dirname "$d")
+    [ -e "$m/terraform.tfstate" ] || [ -d "$m/terraform.tfstate.d" ] && continue   # local state
+    # Re-init would silently switch back to `default`, so a later apply could
+    # hit the wrong workspace.
+    if [ -f "$d/environment" ] && [ "$(cat "$d/environment")" != default ]; then
+      continue
+    fi
+    [ "$(checkout_kind "$m")" = linked ] || continue
+    recent "$d" "$m" -maxdepth 1 && continue
+    reap "$d" "terraform, idle ${AGE_DAYS}d+"
+  done
+fi
+
+# A shared build-dir is written by every workspace, so it is never idle. Wipe it
+# whole past the cap, but only while no cargo build is running.
+if [ -n "$shared_real" ]; then
+  shared_kb=$(du -sk "$shared_real" | cut -f1)
+  if [ "$shared_kb" -gt $((SHARED_CAP_GB * 1048576)) ]; then
+    if pgrep -x cargo >/dev/null || pgrep -x rustc >/dev/null; then
+      log "skip $shared_real ($(gib "$shared_kb") GiB): cargo is building, retry next run"
+    else
+      reap "$shared_real" "shared build-dir over ${SHARED_CAP_GB} GiB"
+    fi
+  fi
+fi
+
+log "done (free $(free_gib) GiB)"
