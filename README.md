@@ -7,7 +7,7 @@ grows its own cargo build directory, often 5–25 GB, and its own `.terraform`
 provider downloads, about 0.7 GB per module. Nothing ever deletes them, and a 1 TB
 disk can fill in a week. `reap-build-dirs` runs daily and deletes build output that
 nothing has written to for a few days. It never touches source code or git history,
-and it always keeps your main checkout's build state.
+and it always keeps your main checkout's `target/`.
 
 ```console
 $ reap-build-dirs --dry-run
@@ -133,6 +133,21 @@ incremental = false   # throwaway trees never get to reuse incremental state
 Then add that root to the search: `REAP_ROOTS="$HOME/git:$HOME/.cargo/build"`. Each
 workspace's dir is deleted once it has been idle for `REAP_AGE_DAYS`, like any other
 build dir.
+
+That includes your main checkout's dir: only a main checkout's own `target/` is
+protected, and nothing tells which dir under `~/.cargo/build` belongs to it. To keep its
+build state through a long break, build it in-tree again with a config file in that
+checkout, kept out of git:
+
+```toml
+# <main checkout>/.cargo/config.toml
+[build]
+build-dir = "{workspace-root}/target"
+```
+
+Cargo also reads this file in every directory below it, so worktrees nested inside the
+checkout (`repo/.worktrees/pr-42`) build into their own `target/` too. That is safe:
+`{workspace-root}` differs per worktree, and their idle `target/` dirs are still deleted.
 
 > **Don't share one build-dir across checkouts of the same repo.** A literal path
 > (`build-dir = "/Users/you/.cargo/build-shared"`) looks like a way to compile

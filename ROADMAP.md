@@ -19,10 +19,11 @@ should make the "delete it" answer impossible to reach by accident.
   Implemented in the script, where deleting still happens; it moves to Rust with step 4.
 - **Environment it can't assume** (`r16_…` to `r21_…`) — refuse to start when git can't
   run; skip other users' dirs; pin the idle boundary, link handling, spaces and nested
-  dirs so the Rust discovery has to reproduce them.
+  dirs so the Rust discovery has to reproduce them. Worktrees nested inside a main
+  checkout are worktrees (`r23_…`).
 - **macOS temp dir** (`r22_…`) — the per-user temp dir is found with
-  `getconf DARWIN_USER_TEMP_DIR`, not only from `$TMPDIR`, which a scheduler may not
-  set. A launchd setup needs no machine-specific paths.
+  `getconf DARWIN_USER_TEMP_DIR`, not only from `$TMPDIR`, which cron or a wrapper
+  script may not set (launchd does).
 
 ## Next
 

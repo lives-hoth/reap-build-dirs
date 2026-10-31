@@ -86,8 +86,8 @@ fn main() -> ExitCode {
     ExitCode::from(127)
 }
 
-/// `/tmp`, `$TMPDIR`, and on macOS the per-user temp dir, found directly because a
-/// scheduler may start the reaper without `TMPDIR`. Roots that don't exist are skipped.
+/// `/tmp`, `$TMPDIR`, and on macOS the per-user temp dir, found directly because cron
+/// or a wrapper script may start the reaper without `TMPDIR`. Missing roots are skipped.
 fn default_temp_roots() -> String {
     let mut roots = vec![String::from("/tmp")];
     roots.extend(std::env::var("TMPDIR").ok());

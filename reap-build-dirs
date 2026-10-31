@@ -42,7 +42,7 @@ done
 
 AGE_DAYS=${REAP_AGE_DAYS:-3}
 ROOTS=${REAP_ROOTS:-$HOME/git}
-# On macOS the per-user temp dir is found directly: a scheduler may not set TMPDIR.
+# On macOS the per-user temp dir is found directly: cron may not set TMPDIR.
 TEMP_ROOTS=${REAP_TEMP_ROOTS:-/tmp:${TMPDIR:-}:$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)}
 TERRAFORM=${REAP_TERRAFORM:-1}
 SHARED_DIR=${REAP_SHARED_BUILD_DIR:-}

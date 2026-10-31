@@ -577,7 +577,7 @@ fn r16_refuses_to_start_when_git_cannot_run() {
         f.main_checkout("repo").cargo_dir("git/repo/target", "CACHEDIR.TAG")
             .cargo_dir("tmp/job", "CACHEDIR.TAG")
             .age("git", 10).age("tmp", 10);
-        let path = path_without_git(&f, broken_git);
+        let path = path_without(&f, "git", broken_git);
         let run = f.run(&[], &[("PATH", &path)]);
         assert_eq!(run.code(), 2, "broken_git={}: {}", broken_git.is_some(), run.stdout());
         assert!(f.exists("git/repo/target") && f.exists("tmp/job"), "deleted without git");
@@ -664,11 +664,27 @@ fn r21_nested_build_dirs() {
 }
 
 #[test]
+fn r23_worktree_nested_inside_the_main_checkout_is_a_worktree() {
+    // Review worktrees often live inside the main checkout (`repo/.worktrees/pr1`).
+    // Being under the main checkout's path doesn't make their target/ the main one.
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo/.worktrees/pr1")
+        .cargo_dir("git/repo/target", "CACHEDIR.TAG")
+        .cargo_dir("git/repo/.worktrees/pr1/target", "CACHEDIR.TAG")
+        .age("git", 10);
+    let run = f.run(&[], &[]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(f.exists("git/repo/target"), "main checkout's target/ deleted");
+    assert!(!f.exists("git/repo/.worktrees/pr1/target"), "nested worktree's target/ kept");
+}
+
+#[test]
 #[cfg(target_os = "macos")]
 fn r22_macos_user_temp_dir_is_searched_without_tmpdir() {
-    // A scheduler may start the reaper without TMPDIR, and the per-user temp dir's
-    // path differs on every Mac, so it must be found without either. Dry run: with no
-    // REAP_TEMP_ROOTS this searches the real temp dirs.
+    // cron or a wrapper script may start the reaper without TMPDIR, and the per-user
+    // temp dir's path differs on every Mac, so it must be found without either. With
+    // no REAP_TEMP_ROOTS this searches the real temp dirs: dry run, and an `rm` that
+    // always fails, so a broken dry run can't delete anything real.
     let out = Command::new("getconf").arg("DARWIN_USER_TEMP_DIR").output().unwrap();
     let user_tmp = String::from_utf8(out.stdout).unwrap();
     let dir = tempfile::tempdir_in(user_tmp.trim()).unwrap();
@@ -679,7 +695,10 @@ fn r22_macos_user_temp_dir_is_searched_without_tmpdir() {
     let git = dir.path().join("git");
     fs::create_dir_all(&git).unwrap();
 
+    let no_rm = Fixture::new();
+    let path = path_without(&no_rm, "rm", Some("#!/bin/sh\nexit 1\n"));
     let mut cmd = Command::new(bin());
+    cmd.env("PATH", path);
     for var in ["REAP_TEMP_ROOTS", "TMPDIR", "REAP_AGE_DAYS", "REAP_TERRAFORM",
                 "REAP_SHARED_BUILD_DIR", "REAP_SHARED_CAP_GB", "DRY_RUN"] {
         cmd.env_remove(var);
@@ -690,9 +709,9 @@ fn r22_macos_user_temp_dir_is_searched_without_tmpdir() {
     assert!(run.reaped_paths().contains(&job.to_str().unwrap().to_owned()), "{}", run.stdout());
 }
 
-/// A PATH holding every command on the current PATH except `git`, plus, when
-/// given, a `git` that runs this script instead.
-fn path_without_git(f: &Fixture, broken_git: Option<&str>) -> String {
+/// A PATH holding every command on the current PATH except `cmd`, plus, when
+/// given, a `cmd` that runs this script instead.
+fn path_without(f: &Fixture, cmd: &str, replacement: Option<&str>) -> String {
     use std::os::unix::fs::PermissionsExt;
     let bin = f.path("bin");
     fs::create_dir_all(&bin).unwrap();
@@ -700,15 +719,15 @@ fn path_without_git(f: &Fixture, broken_git: Option<&str>) -> String {
         let Ok(entries) = fs::read_dir(&dir) else { continue };
         for e in entries.flatten() {
             let name = e.file_name();
-            if name == "git" || bin.join(&name).exists() {
+            if name == cmd || bin.join(&name).exists() {
                 continue;
             }
             let _ = std::os::unix::fs::symlink(e.path(), bin.join(&name));
         }
     }
-    if let Some(script) = broken_git {
-        fs::write(bin.join("git"), script).unwrap();
-        fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+    if let Some(script) = replacement {
+        fs::write(bin.join(cmd), script).unwrap();
+        fs::set_permissions(bin.join(cmd), fs::Permissions::from_mode(0o755)).unwrap();
     }
     bin.to_str().unwrap().to_owned()
 }
