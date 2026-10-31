@@ -297,6 +297,21 @@ fn r07_dir_whose_age_cannot_be_checked_is_kept() {
     assert!(run.reaped().is_empty(), "tried to delete: {:?}", run.reaped());
 }
 
+#[test]
+fn r15_idle_per_workspace_build_dir_under_a_build_root_is_deleted() {
+    // `build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"` lays dirs out
+    // as <root>/<2 hex>/<hash>, with no checkout to tie them to.
+    let f = Fixture::new();
+    f.cargo_dir("build/59/a9c965ec3ac137", ".rustc_info.json")
+        .cargo_dir("build/b0/7114977524b2ca", "CACHEDIR.TAG")
+        .age("build", 10)
+        .age("build/b0/7114977524b2ca/debug/deps/libfoo.rlib", 0);
+    let roots = format!("{}:{}", f.path("git").display(), f.path("build").display());
+    f.run(&[], &[("REAP_ROOTS", &roots)]);
+    assert!(!f.exists("build/59/a9c965ec3ac137"));
+    assert!(f.exists("build/b0/7114977524b2ca"), "a recently used workspace's dir is kept");
+}
+
 // --- Terraform -----------------------------------------------------------------
 
 #[test]

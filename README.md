@@ -24,7 +24,7 @@ $ reap-build-dirs --dry-run
 |---|---|---|
 | Cargo build dirs | under `REAP_ROOTS`, plus `/tmp` and `$TMPDIR` (4 levels deep) | nothing written for `REAP_AGE_DAYS` |
 | `.terraform` dirs | in **linked git worktrees** under `REAP_ROOTS` | nothing written for `REAP_AGE_DAYS` |
-| A shared cargo `build-dir` | `REAP_SHARED_BUILD_DIR`, if you set it | larger than `REAP_SHARED_CAP_GB`, and no cargo or rustc is running |
+| A shared cargo `build-dir` (not recommended, see below) | `REAP_SHARED_BUILD_DIR`, if you set it | larger than `REAP_SHARED_CAP_GB`, and no cargo or rustc is running |
 
 Everything it deletes is a cache. The next `cargo build` or `terraform init`
 recreates it.
@@ -104,32 +104,31 @@ mkdir -p ~/.terraform.d/plugin-cache
 echo 'plugin_cache_dir = "$HOME/.terraform.d/plugin-cache"' >> ~/.terraformrc
 ```
 
-**Share cargo's intermediate build output across worktrees.** Since Rust 1.96, a
-global `build-dir` lets every worktree reuse one copy of compiled dependencies
-instead of compiling its own:
+**Move cargo's intermediate build output out of your checkouts, one dir per
+workspace.** Since Rust 1.96, a global `build-dir` keeps `deps/`, `incremental/`
+and friends out of each worktree's `target/`, so they all sit under one root that
+`reap-build-dirs` can sweep:
 
 ```toml
 # ~/.cargo/config.toml
 [build]
-build-dir = "/Users/you/.cargo/build-shared"
+build-dir = "{cargo-cache-home}/build/{workspace-path-hash}"
 incremental = false   # throwaway trees never get to reuse incremental state
 ```
 
-A shared build-dir never shrinks by itself, so point `REAP_SHARED_BUILD_DIR` at it
-and let `reap-build-dirs` wipe it when it passes the cap. Two builds can't use the
-same build-dir at once, so concurrent builds wait for each other. A repo's own
-`.cargo/config.toml` overrides the global one, so a tree you work in every day can
-opt back out:
+Then add that root to the search: `REAP_ROOTS="$HOME/git:$HOME/.cargo/build"`. Each
+workspace's dir is deleted once it has been idle for `REAP_AGE_DAYS`, like any other
+build dir.
 
-```toml
-# <your main checkout>/.cargo/config.toml
-[build]
-build-dir = "{workspace-root}/target"
-incremental = true
-```
+> **Don't share one build-dir across checkouts of the same repo.** A literal path
+> (`build-dir = "/Users/you/.cargo/build-shared"`) looks like a way to compile
+> dependencies once, but cargo identifies your own crates by name and version, not by
+> location. Two checkouts of the same crate then reuse each other's build: `cargo
+> build` reports nothing to do, and a worktree runs or tests *another* worktree's
+> code. Include `{workspace-path-hash}` so each workspace gets its own dir.
 
-That opt-out file is usually gitignored. If yours is committed, every worktree
-inherits it and opts back out of sharing too.
+If you already have a shared build-dir, `REAP_SHARED_BUILD_DIR` still wipes it once
+it passes `REAP_SHARED_CAP_GB`.
 
 ## Testing
 

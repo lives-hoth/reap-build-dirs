@@ -7,4 +7,4 @@ ExecStart=%h/.local/bin/reap-build-dirs
 Nice=19
 IOSchedulingClass=idle
 # Settings, for example:
-# Environment=REAP_SHARED_BUILD_DIR=%h/.cargo/build-shared
+# Environment=REAP_ROOTS=%h/git:%h/.cargo/build

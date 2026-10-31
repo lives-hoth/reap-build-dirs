@@ -14,8 +14,8 @@
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <!-- Settings go here, for example:
-    <key>REAP_SHARED_BUILD_DIR</key>
-    <string>__HOME__/.cargo/build-shared</string>
+    <key>REAP_ROOTS</key>
+    <string>__HOME__/git:__HOME__/.cargo/build</string>
     -->
   </dict>
   <!-- Daily at 04:30; if the Mac was asleep, launchd runs it once on wake. -->
