@@ -5,6 +5,7 @@
 //! from its `REAP_*` environment variable; a flag wins over the variable, and the
 //! variable over the default.
 
+use std::num::NonZeroU32;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
 
@@ -31,9 +32,9 @@ struct Args {
     temp_roots: Option<String>,
 
     /// Days without writes before a dir is deleted
-    #[arg(long, env = "REAP_AGE_DAYS", default_value_t = 3,
-          value_parser = clap::value_parser!(u32).range(1..))]
-    age_days: u32,
+    // NonZero: an age of 0 would make every dir idle (docs/rust-type-design.md).
+    #[arg(long, env = "REAP_AGE_DAYS", default_value_t = NonZeroU32::new(3).unwrap())]
+    age_days: NonZeroU32,
 
     /// Leave .terraform dirs alone
     #[arg(long)]
@@ -44,8 +45,10 @@ struct Args {
     shared_build_dir: Option<String>,
 
     /// Size in GB at which the shared build-dir is wiped
-    #[arg(long, env = "REAP_SHARED_CAP_GB", default_value_t = 100)]
-    shared_cap_gb: u64,
+    // Bounded to match the script, whose 64-bit arithmetic overflows past this.
+    #[arg(long, env = "REAP_SHARED_CAP_GB", default_value_t = 100,
+          value_parser = clap::value_parser!(u32).range(..=999_999_999))]
+    shared_cap_gb: u32,
 }
 
 fn main() -> ExitCode {

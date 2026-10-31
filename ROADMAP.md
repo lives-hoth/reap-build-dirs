@@ -6,7 +6,9 @@ Each step replaces one piece, test-first: un-ignore or add its test in `tests/sp
 watch it fail, implement it in Rust, and keep the whole spec green against both the
 binary and the script (`REAP_BIN`) until the script is gone.
 
-`tests/spec.rs` is the specification. This file only orders the work.
+`tests/spec.rs` is the specification. This file only orders the work. Rust code
+follows [`docs/rust-type-design.md`](docs/rust-type-design.md): every slice's types
+should make the "delete it" answer impossible to reach by accident.
 
 ## Done
 
@@ -15,6 +17,9 @@ binary and the script (`REAP_BIN`) until the script is gone.
   before anything is deleted.
 - **Exit code** (`r13_…`) — exit 1 when any delete failed, after finishing the rest.
   Implemented in the script, where deleting still happens; it moves to Rust with step 5.
+- **Environment it can't assume** (`r16_…` to `r21_…`) — refuse to start when git can't
+  run; skip other users' dirs; pin the idle boundary, link handling, spaces and nested
+  dirs so the Rust discovery has to reproduce them.
 
 ## Next
 

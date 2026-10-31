@@ -51,6 +51,14 @@ die() { echo "reap-build-dirs: $*" >&2; exit 2; }
 # idle. Refuse to start instead.
 case "$AGE_DAYS" in ''|*[!0-9]*|0) die "REAP_AGE_DAYS must be a whole number of days, at least 1 (got '$AGE_DAYS')" ;; esac
 case "$SHARED_CAP_GB" in ''|*[!0-9]*) die "REAP_SHARED_CAP_GB must be a whole number (got '$SHARED_CAP_GB')" ;; esac
+# Leading zeros would make bash read the number as octal. Past 9 digits the cap in
+# KB overflows bash's 64-bit arithmetic and wraps negative, which would wipe.
+cap=${SHARED_CAP_GB#"${SHARED_CAP_GB%%[!0]*}"}
+[ ${#cap} -le 9 ] || die "REAP_SHARED_CAP_GB must be at most 999999999 (got '$SHARED_CAP_GB')"
+SHARED_CAP_GB=${cap:-0}
+# git tells a main checkout from a worktree. Without it a main checkout's target/
+# would look unprotected, so don't run at all.
+git --version >/dev/null 2>&1 || die "git must be runnable to recognize main checkouts ('git --version' failed)"
 
 log() { echo "$(date '+%F %T') $*"; }
 gib() { awk -v k="$1" 'BEGIN { printf "%.1f", k / 1048576 }'; }
@@ -109,6 +117,7 @@ failures=0
 # Shortest paths first, so a nested build dir is skipped once its parent is gone.
 while IFS= read -r d; do
   [ -d "$d" ] || continue
+  [ -O "$d" ] || continue                       # another user's: theirs to clean up
   case "$d" in "$shared_real"|"$shared_real"/*) [ -n "$shared_real" ] && continue ;; esac
   { [ -d "$d/debug/deps" ] || [ -d "$d/release/deps" ]; } || continue
   if [ "$(basename "$d")" = target ] && [ "$(checkout_kind "$(dirname "$d")")" = main ]; then
@@ -127,6 +136,7 @@ done < <(
 # `terraform init` restores it. Only linked worktrees are touched.
 if [ "$TERRAFORM" = 1 ]; then
   while IFS= read -r d; do
+    [ -O "$d" ] || continue                     # another user's: theirs to clean up
     m=$(dirname "$d")
     [ -e "$m/terraform.tfstate" ] || [ -d "$m/terraform.tfstate.d" ] && continue   # local state
     # Re-init would silently switch back to `default`, so a later apply could

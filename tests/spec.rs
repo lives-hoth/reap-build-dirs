@@ -16,8 +16,6 @@ use std::time::{Duration, SystemTime};
 use filetime::FileTime;
 use tempfile::TempDir;
 
-const DAY: u64 = 86_400;
-
 /// The implementation under test.
 fn bin() -> PathBuf {
     // A cargo build-dir shared between checkouts of this repo can hand this test
@@ -123,7 +121,11 @@ impl Fixture {
 
     /// Set the mtime of everything under `rel` to `days` ago.
     fn age(&self, rel: &str, days: u64) -> &Self {
-        let t = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(days * DAY));
+        self.age_hours(rel, days * 24)
+    }
+
+    fn age_hours(&self, rel: &str, hours: u64) -> &Self {
+        let t = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(hours * 3600));
         set_mtime_tree(&self.path(rel), t);
         self
     }
@@ -421,6 +423,19 @@ fn r12_invalid_shared_cap_stops_before_deleting_anything() {
 }
 
 #[test]
+fn r12_shared_cap_too_large_to_compute_stops_before_deleting_anything() {
+    // In bash, cap × 1048576 KB wraps past 2^63 to a negative limit, so "never
+    // wipe" turned into "always wipe".
+    let f = Fixture::new();
+    f.cargo_dir("shared", ".rustc_info.json").age("shared", 10);
+    let shared = f.path("shared");
+    let run = f.run(&[], &[("REAP_SHARED_BUILD_DIR", shared.to_str().unwrap()),
+                            ("REAP_SHARED_CAP_GB", "9999999999999")]);
+    assert_eq!(run.code(), 2, "{}", run.stdout());
+    assert!(f.exists("shared"));
+}
+
+#[test]
 fn r12_flag_overrides_environment_variable() {
     if !testing_binary() {
         return;
@@ -545,6 +560,146 @@ fn report_lines_have_the_stable_format() {
         run.reaped(),
         vec![Reaped { path: f.path("tmp/job").to_str().unwrap().to_owned(), reason: "cargo, idle 3d+".into() }]
     );
+}
+
+// --- Environment the reaper can't assume ---------------------------------------
+
+#[test]
+fn r16_refuses_to_start_when_git_cannot_run() {
+    // Without git a main checkout can't be recognized, so its target/ would lose
+    // its protection. Covers git missing and git present but broken (as after a
+    // macOS update breaks the command line tools).
+    for broken_git in [None, Some("#!/bin/sh\necho 'xcrun: error: invalid active developer path' >&2\nexit 1\n")] {
+        let f = Fixture::new();
+        f.main_checkout("repo").cargo_dir("git/repo/target", "CACHEDIR.TAG")
+            .cargo_dir("tmp/job", "CACHEDIR.TAG")
+            .age("git", 10).age("tmp", 10);
+        let path = path_without_git(&f, broken_git);
+        let run = f.run(&[], &[("PATH", &path)]);
+        assert_eq!(run.code(), 2, "broken_git={}: {}", broken_git.is_some(), run.stdout());
+        assert!(f.exists("git/repo/target") && f.exists("tmp/job"), "deleted without git");
+    }
+}
+
+#[test]
+fn r17_another_users_build_dir_is_skipped_silently() {
+    let f = Fixture::new();
+    f.cargo_dir("tmp/theirs", "CACHEDIR.TAG").cargo_dir("tmp/mine", "CACHEDIR.TAG").age("tmp", 10);
+    if !as_superuser(&["chown", "-R", "65534", f.path("tmp/theirs").to_str().unwrap()]) {
+        eprintln!("skipped: needs root or passwordless sudo to create another user's dir");
+        return;
+    }
+    let run = f.run(&[], &[]);
+    as_superuser(&["chown", "-R", &uid(), f.path("tmp/theirs").to_str().unwrap()]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(f.exists("tmp/theirs"));
+    assert!(!f.exists("tmp/mine"));
+    assert!(!run.stdout().contains("tmp/theirs"), "mentioned: {}", run.stdout());
+}
+
+#[test]
+fn r17_another_users_terraform_dir_is_skipped_silently() {
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/theirs").tf_dir("git/repo-review/mine")
+        .age("git", 10);
+    let theirs = f.path("git/repo-review/theirs/.terraform");
+    if !as_superuser(&["chown", "-R", "65534", theirs.to_str().unwrap()]) {
+        eprintln!("skipped: needs root or passwordless sudo to create another user's dir");
+        return;
+    }
+    let run = f.run(&[], &[]);
+    as_superuser(&["chown", "-R", &uid(), theirs.to_str().unwrap()]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(f.exists("git/repo-review/theirs/.terraform"));
+    assert!(!f.exists("git/repo-review/mine/.terraform"));
+}
+
+#[test]
+fn r18_idle_means_no_write_for_the_full_number_of_days() {
+    // Same boundary on every OS: BSD and GNU find round -mtime differently.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/h70", "CACHEDIR.TAG").cargo_dir("tmp/h74", "CACHEDIR.TAG")
+        .age_hours("tmp/h70", 70).age_hours("tmp/h74", 74);
+    f.run(&[], &[("REAP_AGE_DAYS", "3")]);
+    assert!(f.exists("tmp/h70"), "deleted before 3 full days");
+    assert!(!f.exists("tmp/h74"));
+}
+
+#[test]
+fn r19_links_are_not_followed_out_of_a_root() {
+    let f = Fixture::new();
+    f.cargo_dir("outside/target", "CACHEDIR.TAG").age("outside", 10);
+    std::os::unix::fs::symlink(f.path("outside"), f.path("git/link")).unwrap();
+    f.run(&[], &[]);
+    assert!(f.exists("outside/target"));
+}
+
+#[test]
+fn r20_paths_with_spaces_are_handled() {
+    let f = Fixture::new();
+    f.cargo_dir("tmp/my build", "CACHEDIR.TAG").age("tmp", 10);
+    let run = f.run(&[], &[]);
+    assert!(!f.exists("tmp/my build"));
+    assert_eq!(run.reaped_paths(), vec![f.path("tmp/my build").to_str().unwrap().to_owned()]);
+}
+
+#[test]
+fn r21_nested_build_dirs() {
+    // All idle: the outer dir goes, and the inner one is not reported separately.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/outer", "CACHEDIR.TAG").cargo_dir("tmp/outer/inner", "CACHEDIR.TAG").age("tmp", 10);
+    let run = f.run(&[], &[]);
+    assert_eq!(run.code(), 0);
+    assert_eq!(run.reaped_paths(), vec![f.path("tmp/outer").to_str().unwrap().to_owned()]);
+    // Inner written recently: the whole outer tree counts as in use.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/outer", "CACHEDIR.TAG").cargo_dir("tmp/outer/inner", "CACHEDIR.TAG")
+        .age("tmp", 10).age("tmp/outer/inner/debug/deps/libfoo.rlib", 0);
+    f.run(&[], &[]);
+    assert!(f.exists("tmp/outer/inner"));
+}
+
+/// A PATH holding every command on the current PATH except `git`, plus, when
+/// given, a `git` that runs this script instead.
+fn path_without_git(f: &Fixture, broken_git: Option<&str>) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = f.path("bin");
+    fs::create_dir_all(&bin).unwrap();
+    for dir in std::env::split_paths(&std::env::var_os("PATH").unwrap()) {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            let name = e.file_name();
+            if name == "git" || bin.join(&name).exists() {
+                continue;
+            }
+            let _ = std::os::unix::fs::symlink(e.path(), bin.join(&name));
+        }
+    }
+    if let Some(script) = broken_git {
+        fs::write(bin.join("git"), script).unwrap();
+        fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    bin.to_str().unwrap().to_owned()
+}
+
+fn uid() -> String {
+    let out = Command::new("id").arg("-u").output().expect("run id");
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// Run a command as root: directly when already root, else via `sudo -n`.
+fn as_superuser(cmd: &[&str]) -> bool {
+    let mut c = if running_as_root() {
+        let mut c = Command::new(cmd[0]);
+        c.args(&cmd[1..]);
+        c
+    } else {
+        let mut c = Command::new("sudo");
+        c.arg("-n").args(cmd);
+        c
+    };
+    c.output().is_ok_and(|o| o.status.success())
 }
 
 fn set_mode(p: &Path, mode: u32) {

@@ -35,6 +35,10 @@ recreates it.
   state that makes your daily rebuilds fast. The main checkout is identified by
   asking git, not by path, so it works with any worktree layout.
 - **Anything written in the last `REAP_AGE_DAYS` days**, including builds in progress.
+- **Other users' dirs.** Only dirs owned by the user running it are considered, so a
+  shared `/tmp` doesn't produce a failed delete every day.
+- **Anything at all if git can't run.** git is what tells a main checkout from a
+  worktree, so without it the run stops before deleting anything.
 - **Anything it can't fully inspect.** If checking a dir's age fails, for example
   because a subfolder is unreadable, the dir is kept. An invalid setting stops the
   run before anything is deleted.
@@ -96,7 +100,7 @@ journalctl --user -u reap-build-dirs     # the log
 |---|---|
 | `0` | Every delete succeeded (or `--dry-run`) |
 | `1` | At least one delete failed; the run still finished the rest. Failures are logged as `FAILED  <path>` |
-| `2` | Invalid setting or argument; nothing was deleted |
+| `2` | Invalid setting or argument, or git can't run; nothing was deleted |
 
 A scheduler therefore shows a run with failed deletes as failed.
 
@@ -151,7 +155,9 @@ cargo test                                        # the binary
 REAP_BIN="$PWD/reap-build-dirs" cargo test        # the bash script, same spec
 ```
 
-Ignored tests describe decided behavior that isn't implemented yet.
+Ignored tests describe decided behavior that isn't implemented yet. The Rust code
+follows [`docs/rust-type-design.md`](docs/rust-type-design.md); the migration order is
+in [`ROADMAP.md`](ROADMAP.md).
 
 ## License
 
