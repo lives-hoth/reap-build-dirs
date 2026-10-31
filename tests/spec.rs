@@ -69,6 +69,9 @@ impl Fixture {
     fn git(&self, args: &[&str]) {
         let ok = Command::new("git")
             .args(["-c", "init.defaultBranch=main", "-c", "user.name=t", "-c", "user.email=t@t"])
+            // Otherwise `commit` starts a detached `git maintenance`, whose lock files
+            // can vanish while a test walks the tree to age it.
+            .args(["-c", "maintenance.auto=false"])
             .args(args)
             .output()
             .expect("run git")
