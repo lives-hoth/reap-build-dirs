@@ -660,6 +660,33 @@ fn r21_nested_build_dirs() {
     assert!(f.exists("tmp/outer/inner"));
 }
 
+#[test]
+#[cfg(target_os = "macos")]
+fn r22_macos_user_temp_dir_is_searched_without_tmpdir() {
+    // A scheduler may start the reaper without TMPDIR, and the per-user temp dir's
+    // path differs on every Mac, so it must be found without either. Dry run: with no
+    // REAP_TEMP_ROOTS this searches the real temp dirs.
+    let out = Command::new("getconf").arg("DARWIN_USER_TEMP_DIR").output().unwrap();
+    let user_tmp = String::from_utf8(out.stdout).unwrap();
+    let dir = tempfile::tempdir_in(user_tmp.trim()).unwrap();
+    let job = dir.path().canonicalize().unwrap().join("job");
+    fs::create_dir_all(job.join("debug/deps")).unwrap();
+    fs::write(job.join("CACHEDIR.TAG"), "").unwrap();
+    set_mtime_tree(&job, FileTime::from_system_time(SystemTime::now() - Duration::from_secs(10 * 86400)));
+    let git = dir.path().join("git");
+    fs::create_dir_all(&git).unwrap();
+
+    let mut cmd = Command::new(bin());
+    for var in ["REAP_TEMP_ROOTS", "TMPDIR", "REAP_AGE_DAYS", "REAP_TERRAFORM",
+                "REAP_SHARED_BUILD_DIR", "REAP_SHARED_CAP_GB", "DRY_RUN"] {
+        cmd.env_remove(var);
+    }
+    let run = Run(cmd.env("REAP_ROOTS", &git).arg("--dry-run").output().unwrap());
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(job.exists());
+    assert!(run.reaped_paths().contains(&job.to_str().unwrap().to_owned()), "{}", run.stdout());
+}
+
 /// A PATH holding every command on the current PATH except `git`, plus, when
 /// given, a `git` that runs this script instead.
 fn path_without_git(f: &Fixture, broken_git: Option<&str>) -> String {

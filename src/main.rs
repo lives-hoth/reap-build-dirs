@@ -27,7 +27,8 @@ struct Args {
     #[arg(long, env = "REAP_ROOTS")]
     roots: Option<String>,
 
-    /// Colon-separated temp dirs, searched 4 levels deep [default: /tmp:$TMPDIR]
+    /// Colon-separated temp dirs, searched 4 levels deep
+    /// [default: /tmp, $TMPDIR and, on macOS, the per-user temp dir]
     #[arg(long, env = "REAP_TEMP_ROOTS")]
     temp_roots: Option<String>,
 
@@ -65,10 +66,10 @@ fn main() -> ExitCode {
     script
         .env_remove("DRY_RUN")
         .env("REAP_AGE_DAYS", args.age_days.to_string())
-        .env("REAP_SHARED_CAP_GB", args.shared_cap_gb.to_string());
+        .env("REAP_SHARED_CAP_GB", args.shared_cap_gb.to_string())
+        .env("REAP_TEMP_ROOTS", args.temp_roots.unwrap_or_else(default_temp_roots));
     for (name, value) in [
         ("REAP_ROOTS", &args.roots),
-        ("REAP_TEMP_ROOTS", &args.temp_roots),
         ("REAP_SHARED_BUILD_DIR", &args.shared_build_dir),
     ] {
         match value {
@@ -83,4 +84,20 @@ fn main() -> ExitCode {
     let err = script.exec();
     eprintln!("reap-build-dirs: could not run bash: {err}");
     ExitCode::from(127)
+}
+
+/// `/tmp`, `$TMPDIR`, and on macOS the per-user temp dir, found directly because a
+/// scheduler may start the reaper without `TMPDIR`. Roots that don't exist are skipped.
+fn default_temp_roots() -> String {
+    let mut roots = vec![String::from("/tmp")];
+    roots.extend(std::env::var("TMPDIR").ok());
+    if cfg!(target_os = "macos") {
+        // If getconf fails this root is left out: fewer dirs searched, none deleted wrongly.
+        if let Ok(out) = Command::new("getconf").arg("DARWIN_USER_TEMP_DIR").output()
+            && out.status.success()
+        {
+            roots.push(String::from_utf8_lossy(&out.stdout).trim().to_owned());
+        }
+    }
+    roots.join(":")
 }

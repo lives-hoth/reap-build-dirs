@@ -22,7 +22,7 @@ $ reap-build-dirs --dry-run
 
 | What | Where | When |
 |---|---|---|
-| Cargo build dirs | under `REAP_ROOTS`, plus `/tmp` and `$TMPDIR` (4 levels deep) | nothing written for `REAP_AGE_DAYS` |
+| Cargo build dirs | under `REAP_ROOTS`, plus the temp dirs (4 levels deep) | nothing written for `REAP_AGE_DAYS` |
 | `.terraform` dirs | in **linked git worktrees** under `REAP_ROOTS` | nothing written for `REAP_AGE_DAYS` |
 | A shared cargo `build-dir` (not recommended, see below) | `REAP_SHARED_BUILD_DIR`, if you set it | larger than `REAP_SHARED_CAP_GB`, and no cargo or rustc is running |
 
@@ -87,7 +87,7 @@ journalctl --user -u reap-build-dirs     # the log
 | Variable | Default | Meaning |
 |---|---|---|
 | `REAP_ROOTS` | `$HOME/git` | Colon-separated dirs where your checkouts live |
-| `REAP_TEMP_ROOTS` | `/tmp:$TMPDIR` | Colon-separated temp dirs, searched 4 levels deep |
+| `REAP_TEMP_ROOTS` | `/tmp`, `$TMPDIR`, and on macOS the per-user temp dir | Colon-separated temp dirs, searched 4 levels deep |
 | `REAP_AGE_DAYS` | `3` | Days without writes before a dir is deleted (a whole number, at least 1) |
 | `REAP_TERRAFORM` | `1` | Set to `0` to leave `.terraform` dirs alone |
 | `REAP_SHARED_BUILD_DIR` | unset | A cargo `build-dir` shared across workspaces |

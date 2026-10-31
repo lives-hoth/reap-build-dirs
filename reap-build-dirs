@@ -21,7 +21,8 @@ local Terraform state, any .terraform with a non-default workspace selected.
 Environment:
   REAP_ROOTS             colon-separated dirs to search  (default: $HOME/git)
   REAP_TEMP_ROOTS        colon-separated temp dirs, searched 4 levels deep
-                         (default: /tmp and $TMPDIR)
+                         (default: /tmp, $TMPDIR and, on macOS, the
+                         per-user temp dir)
   REAP_AGE_DAYS          idle days before a dir is deleted, at least 1  (default: 3)
   REAP_TERRAFORM         0 to skip .terraform dirs  (default: 1)
   REAP_SHARED_BUILD_DIR  a cargo build-dir shared across workspaces  (default: unset)
@@ -41,7 +42,8 @@ done
 
 AGE_DAYS=${REAP_AGE_DAYS:-3}
 ROOTS=${REAP_ROOTS:-$HOME/git}
-TEMP_ROOTS=${REAP_TEMP_ROOTS:-/tmp:${TMPDIR:-}}
+# On macOS the per-user temp dir is found directly: a scheduler may not set TMPDIR.
+TEMP_ROOTS=${REAP_TEMP_ROOTS:-/tmp:${TMPDIR:-}:$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)}
 TERRAFORM=${REAP_TERRAFORM:-1}
 SHARED_DIR=${REAP_SHARED_BUILD_DIR:-}
 SHARED_CAP_GB=${REAP_SHARED_CAP_GB:-100}

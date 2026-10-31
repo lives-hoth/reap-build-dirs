@@ -16,30 +16,30 @@ should make the "delete it" answer impossible to reach by accident.
   over the variable, the variable over the default. Invalid values stop the run
   before anything is deleted.
 - **Exit code** (`r13_…`) — exit 1 when any delete failed, after finishing the rest.
-  Implemented in the script, where deleting still happens; it moves to Rust with step 5.
+  Implemented in the script, where deleting still happens; it moves to Rust with step 4.
 - **Environment it can't assume** (`r16_…` to `r21_…`) — refuse to start when git can't
   run; skip other users' dirs; pin the idle boundary, link handling, spaces and nested
   dirs so the Rust discovery has to reproduce them.
+- **macOS temp dir** (`r22_…`) — the per-user temp dir is found with
+  `getconf DARWIN_USER_TEMP_DIR`, not only from `$TMPDIR`, which a scheduler may not
+  set. A launchd setup needs no machine-specific paths.
 
 ## Next
 
-1. **macOS temp dir** — on macOS, find the per-user temp dir itself
-   (`getconf DARWIN_USER_TEMP_DIR`) instead of relying on `$TMPDIR`, which a
-   scheduler may not set. Then a launchd setup needs no machine-specific paths.
-2. **Main checkout protection** (`r05_…`) — protect only the main checkout's
+1. **Main checkout protection** (`r05_…`) — protect only the main checkout's
    top-level `target/`; other `target/` dirs inside it are deleted when idle.
-3. **Terraform** — move `.terraform` discovery and its keep rules into Rust; run the
+2. **Terraform** — move `.terraform` discovery and its keep rules into Rust; run the
    script with `REAP_TERRAFORM=0`.
-4. **Shared build-dir** (`r11_…_unless_locked`) — move the size-cap wipe into Rust,
+3. **Shared build-dir** (`r11_…_unless_locked`) — move the size-cap wipe into Rust,
    deciding "in use" by cargo's lock instead of looking for cargo processes.
-5. **Cargo build dirs** (`r03_…`) — move discovery into Rust with
+4. **Cargo build dirs** (`r03_…`) — move discovery into Rust with
    [`walkdir`](https://docs.rs/walkdir): depth limits, pruning `.git`, `node_modules`,
    `deps` and `incremental`, no symlink following. Treat any walk error as "can't
    tell, keep it", never skip it. Delete only while holding cargo's build lock, so a
    build that starts mid-delete waits instead of failing. Before relying on the lock,
    test what a waiting build does when the dir it waited on is gone; keeping the lock
    files in place may be safer.
-6. **Remove the script** — the binary owns every rule; drop `REAP_BIN` from CI.
+5. **Remove the script** — the binary owns every rule; drop `REAP_BIN` from CI.
 
 ## Not planned
 
