@@ -90,6 +90,16 @@ journalctl --user -u reap-build-dirs     # the log
 | `REAP_SHARED_CAP_GB` | `100` | Size at which the shared build-dir is wiped |
 | `DRY_RUN` | `0` | `1` reports without deleting, same as `--dry-run` |
 
+## Exit status
+
+| Code | Meaning |
+|---|---|
+| `0` | Every delete succeeded (or `--dry-run`) |
+| `1` | At least one delete failed; the run still finished the rest. Failures are logged as `FAILED  <path>` |
+| `2` | Invalid setting or argument; nothing was deleted |
+
+A scheduler therefore shows a run with failed deletes as failed.
+
 ## Waste less in the first place
 
 Cleaning up after the fact is only half of it. Two config changes cut how much gets

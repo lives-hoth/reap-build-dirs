@@ -13,11 +13,14 @@ binary and the script (`REAP_BIN`) until the script is gone.
 - **Settings** — clap flags, each overridable by its `REAP_*` variable; a flag wins
   over the variable, the variable over the default. Invalid values stop the run
   before anything is deleted.
+- **Exit code** (`r13_…`) — exit 1 when any delete failed, after finishing the rest.
+  Implemented in the script, where deleting still happens; it moves to Rust with step 5.
 
 ## Next
 
-1. **Exit code** (`r13_failed_delete_exits_nonzero`) — exit 1 when any delete failed,
-   so a scheduler shows the run as failed.
+1. **macOS temp dir** — on macOS, find the per-user temp dir itself
+   (`getconf DARWIN_USER_TEMP_DIR`) instead of relying on `$TMPDIR`, which a
+   scheduler may not set. Then a launchd setup needs no machine-specific paths.
 2. **Main checkout protection** (`r05_…`) — protect only the main checkout's
    top-level `target/`; other `target/` dirs inside it are deleted when idle.
 3. **Terraform** — move `.terraform` discovery and its keep rules into Rust; run the

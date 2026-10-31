@@ -463,17 +463,45 @@ fn r13_failed_delete_is_reported() {
 }
 
 #[test]
-#[ignore = "not built yet: exit 1 when any delete failed"]
-fn r13_failed_delete_exits_nonzero() {
+fn r13_failed_cargo_delete_exits_nonzero_after_finishing() {
     if running_as_root() {
+        eprintln!("skipped: root can delete anything");
         return;
     }
     let f = Fixture::new();
-    f.cargo_dir("tmp/stuck", "CACHEDIR.TAG").write("tmp/stuck/sealed/file", "x").age("tmp", 10);
+    f.cargo_dir("tmp/stuck", "CACHEDIR.TAG").write("tmp/stuck/sealed/file", "x")
+        .cargo_dir("tmp/fine", "CACHEDIR.TAG")
+        .age("tmp", 10);
     set_mode(&f.path("tmp/stuck/sealed"), 0o555);
     let run = f.run(&[], &[]);
     set_mode(&f.path("tmp/stuck/sealed"), 0o755);
-    assert_eq!(run.code(), 1);
+    assert_eq!(run.code(), 1, "{}", run.stdout());
+    assert!(!f.exists("tmp/fine"), "one failure must not stop the other deletes");
+    assert!(run.stdout().lines().last().is_some_and(|l| l.contains(" done (free ")));
+}
+
+#[test]
+fn r13_failed_terraform_delete_exits_nonzero() {
+    if running_as_root() {
+        eprintln!("skipped: root can delete anything");
+        return;
+    }
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/infra").write("git/repo-review/infra/.terraform/sealed/file", "x")
+        .age("git", 10);
+    set_mode(&f.path("git/repo-review/infra/.terraform/sealed"), 0o555);
+    let run = f.run(&[], &[]);
+    set_mode(&f.path("git/repo-review/infra/.terraform/sealed"), 0o755);
+    assert_eq!(run.code(), 1, "{}", run.stdout());
+}
+
+#[test]
+fn r13_successful_run_exits_zero() {
+    let f = Fixture::new();
+    f.cargo_dir("tmp/fine", "CACHEDIR.TAG").age("tmp", 10);
+    assert_eq!(f.run(&[], &[]).code(), 0);
+    assert!(!f.exists("tmp/fine"));
 }
 
 #[test]

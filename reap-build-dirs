@@ -73,6 +73,7 @@ reap() { # $1 = dir, $2 = reason
     log "deleted $(gib "${kb:-0}") GiB  $1  ($2)"
   else
     log "FAILED  $1"
+    failures=$((failures + 1))
   fi
 }
 
@@ -100,11 +101,13 @@ shared_real=""
 
 log "start (free $(free_gib) GiB, age ${AGE_DAYS}d, dry_run=$DRY_RUN)"
 
+# reap() counts failed deletes here. The loops below that call it read from
+# process substitution, not a pipe: a piped loop runs in a subshell and its count
+# would be lost.
+failures=0
+
 # Shortest paths first, so a nested build dir is skipped once its parent is gone.
-{
-  each_dir "$ROOTS" | while IFS= read -r r; do cargo_candidates "$r"; done
-  each_dir "$TEMP_ROOTS" | while IFS= read -r r; do cargo_candidates "$r" -maxdepth 4; done
-} | sort -u | awk '{ print length, $0 }' | sort -n | cut -d' ' -f2- | while IFS= read -r d; do
+while IFS= read -r d; do
   [ -d "$d" ] || continue
   case "$d" in "$shared_real"|"$shared_real"/*) [ -n "$shared_real" ] && continue ;; esac
   { [ -d "$d/debug/deps" ] || [ -d "$d/release/deps" ]; } || continue
@@ -113,14 +116,17 @@ log "start (free $(free_gib) GiB, age ${AGE_DAYS}d, dry_run=$DRY_RUN)"
   fi
   recent "$d" && continue
   reap "$d" "cargo, idle ${AGE_DAYS}d+"
-done
+done < <(
+  {
+    each_dir "$ROOTS" | while IFS= read -r r; do cargo_candidates "$r"; done
+    each_dir "$TEMP_ROOTS" | while IFS= read -r r; do cargo_candidates "$r" -maxdepth 4; done
+  } | sort -u | awk '{ print length, $0 }' | sort -n | cut -d' ' -f2-
+)
 
 # .terraform holds downloaded providers and backend settings; with remote state,
 # `terraform init` restores it. Only linked worktrees are touched.
 if [ "$TERRAFORM" = 1 ]; then
-  each_dir "$ROOTS" | while IFS= read -r r; do
-    find "$r" \( -name .git -o -name node_modules \) -prune -o -type d -name .terraform -prune -print 2>/dev/null
-  done | while IFS= read -r d; do
+  while IFS= read -r d; do
     m=$(dirname "$d")
     [ -e "$m/terraform.tfstate" ] || [ -d "$m/terraform.tfstate.d" ] && continue   # local state
     # Re-init would silently switch back to `default`, so a later apply could
@@ -131,7 +137,11 @@ if [ "$TERRAFORM" = 1 ]; then
     [ "$(checkout_kind "$m")" = linked ] || continue
     recent "$d" "$m" -maxdepth 1 && continue
     reap "$d" "terraform, idle ${AGE_DAYS}d+"
-  done
+  done < <(
+    each_dir "$ROOTS" | while IFS= read -r r; do
+      find "$r" \( -name .git -o -name node_modules \) -prune -o -type d -name .terraform -prune -print 2>/dev/null
+    done
+  )
 fi
 
 # A shared build-dir is written by every workspace, so it is never idle. Wipe it
@@ -148,3 +158,5 @@ if [ -n "$shared_real" ]; then
 fi
 
 log "done (free $(free_gib) GiB)"
+# Finish every delete first, then report failure so a scheduler shows it.
+[ "$failures" = 0 ] || exit 1
