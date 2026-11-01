@@ -240,7 +240,6 @@ fn r04_main_checkout_top_level_target_is_kept() {
 }
 
 #[test]
-#[ignore = "not built yet: only the main checkout's top-level target/ is protected"]
 fn r05_other_target_dirs_inside_the_main_checkout_are_deleted() {
     let f = Fixture::new();
     f.main_checkout("repo")

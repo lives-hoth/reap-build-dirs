@@ -96,6 +96,13 @@ checkout_kind() {
   [ "$gd" = "$common" ] && echo main || echo linked
 }
 
+# True for the top level of a main checkout, not for a dir inside one: only the
+# main checkout's own target/ holds the build state worth keeping.
+main_checkout_root() {
+  [ "$(checkout_kind "$1")" = main ] &&
+    [ "$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" = "$1" ]
+}
+
 # Cargo writes CACHEDIR.TAG and/or .rustc_info.json at a build dir's root, and
 # some dirs have only one, so search for both. Matching the name `target` would
 # miss custom build dirs and hit crate sources that contain a `target/` module.
@@ -122,7 +129,7 @@ while IFS= read -r d; do
   [ -O "$d" ] || continue                       # another user's: theirs to clean up
   case "$d" in "$shared_real"|"$shared_real"/*) [ -n "$shared_real" ] && continue ;; esac
   { [ -d "$d/debug/deps" ] || [ -d "$d/release/deps" ]; } || continue
-  if [ "$(basename "$d")" = target ] && [ "$(checkout_kind "$(dirname "$d")")" = main ]; then
+  if [ "$(basename "$d")" = target ] && main_checkout_root "$(dirname "$d")"; then
     continue                                    # main checkout's incremental state
   fi
   recent "$d" && continue

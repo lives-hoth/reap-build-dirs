@@ -31,9 +31,11 @@ recreates it.
 
 ## What it never touches
 
-- **Your main checkout's `target/` and `.terraform/`.** These hold the incremental
-  state that makes your daily rebuilds fast. The main checkout is identified by
-  asking git, not by path, so it works with any worktree layout.
+- **Your main checkout's top-level `target/`, and every `.terraform/` in it.** These
+  hold the build state that makes your daily rebuilds fast. Other build dirs inside the
+  main checkout, such as `crates/x/target` or a copy's `target/`, are deleted when idle.
+  The main checkout is identified by asking git, not by path, so it works with any
+  worktree layout.
 - **Anything written in the last `REAP_AGE_DAYS` days**, including builds in progress.
 - **Other users' dirs.** Only dirs owned by the user running it are considered, so a
   shared `/tmp` doesn't produce a failed delete every day.
