@@ -23,7 +23,7 @@ $ reap-build-dirs --dry-run
 | What | Where | When |
 |---|---|---|
 | Cargo build dirs | under `REAP_ROOTS`, plus the temp dirs (4 levels deep) | nothing written for `REAP_AGE_DAYS` |
-| `.terraform` dirs | in **linked git worktrees** under `REAP_ROOTS` | nothing written for `REAP_AGE_DAYS` |
+| `.terraform` dirs | in **linked git worktrees** under `REAP_ROOTS` | nothing written in it, or to its module's files, for `REAP_AGE_DAYS` |
 | A shared cargo `build-dir` (not recommended, see below) | `REAP_SHARED_BUILD_DIR`, if you set it | larger than `REAP_SHARED_CAP_GB`, and no cargo or rustc is running |
 
 Everything it deletes is a cache. The next `cargo build` or `terraform init`

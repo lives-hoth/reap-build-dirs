@@ -299,6 +299,15 @@ fn r07_dir_whose_age_cannot_be_checked_is_kept() {
     let run = f.run(&["--dry-run"], &[("DRY_RUN", "1")]);
     set_mode(&f.path("tmp/unreadable/locked"), 0o755);
     assert!(run.reaped().is_empty(), "tried to delete: {:?}", run.reaped());
+
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra");
+    fs::create_dir(f.path("git/repo-review/infra/.terraform/locked")).unwrap();
+    f.age("git", 10);
+    set_mode(&f.path("git/repo-review/infra/.terraform/locked"), 0o000);
+    let run = f.run(&["--dry-run"], &[("DRY_RUN", "1")]);
+    set_mode(&f.path("git/repo-review/infra/.terraform/locked"), 0o755);
+    assert!(run.reaped().is_empty(), "tried to delete: {:?}", run.reaped());
 }
 
 #[test]
@@ -324,6 +333,31 @@ fn r08_idle_terraform_dir_in_a_worktree_is_deleted() {
     f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra").age("git", 10);
     f.run(&[], &[]);
     assert!(!f.exists("git/repo-review/infra/.terraform"));
+}
+
+#[test]
+fn r02_terraform_dir_written_anywhere_inside_recently_is_kept() {
+    // `terraform init` writes providers several levels down and leaves `.terraform`
+    // and its direct children untouched.
+    let provider = "git/repo-review/infra/.terraform/providers/registry.terraform.io/hashicorp/aws/6.0.0/darwin_arm64/terraform-provider-aws";
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/infra").write(provider, "x")
+        .age("git", 10)
+        .age(provider, 0);
+    f.run(&[], &[]);
+    assert!(f.exists(provider));
+}
+
+#[test]
+fn r02_terraform_dir_of_a_recently_edited_module_is_kept() {
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/infra").write("git/repo-review/infra/main.tf", "")
+        .age("git", 10)
+        .age("git/repo-review/infra/main.tf", 0);
+    f.run(&[], &[]);
+    assert!(f.exists("git/repo-review/infra/.terraform"));
 }
 
 #[test]
@@ -580,6 +614,7 @@ fn r16_refuses_to_start_when_git_cannot_run() {
         let run = f.run(&[], &[("PATH", &path)]);
         assert_eq!(run.code(), 2, "broken_git={}: {}", broken_git.is_some(), run.stdout());
         assert!(f.exists("git/repo/target") && f.exists("tmp/job"), "deleted without git");
+        assert_eq!(run.stdout(), "", "started without git");
     }
 }
 
@@ -626,6 +661,14 @@ fn r18_idle_means_no_write_for_the_full_number_of_days() {
     f.run(&[], &[("REAP_AGE_DAYS", "3")]);
     assert!(f.exists("tmp/h70"), "deleted before 3 full days");
     assert!(!f.exists("tmp/h74"));
+
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/h70").tf_dir("git/repo-review/h74")
+        .age("git", 10).age_hours("git/repo-review/h70", 70).age_hours("git/repo-review/h74", 74);
+    f.run(&[], &[("REAP_AGE_DAYS", "3")]);
+    assert!(f.exists("git/repo-review/h70/.terraform"), "deleted before 3 full days");
+    assert!(!f.exists("git/repo-review/h74/.terraform"));
 }
 
 #[test]
@@ -635,6 +678,13 @@ fn r19_links_are_not_followed_out_of_a_root() {
     std::os::unix::fs::symlink(f.path("outside"), f.path("git/link")).unwrap();
     f.run(&[], &[]);
     assert!(f.exists("outside/target"));
+
+    // A worktree reached only through a link is outside the roots too.
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "../outside/wt").tf_dir("outside/wt/infra").age("outside", 10);
+    std::os::unix::fs::symlink(f.path("outside"), f.path("git/link")).unwrap();
+    f.run(&[], &[]);
+    assert!(f.exists("outside/wt/infra/.terraform"));
 }
 
 #[test]

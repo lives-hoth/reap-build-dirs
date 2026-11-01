@@ -116,7 +116,9 @@ cargo_candidates() { # $1 = root, $2.. = extra find args
 shared_real=""
 [ -n "$SHARED_DIR" ] && [ -d "$SHARED_DIR" ] && shared_real=$(cd "$SHARED_DIR" && pwd -P)
 
-log "start (free $(free_gib) GiB, age ${AGE_DAYS}d, dry_run=$DRY_RUN)"
+# Run from the binary, which logs the start and done lines itself.
+FROM_BINARY=${REAP_FROM_BINARY:-0}
+[ "$FROM_BINARY" = 1 ] || log "start (free $(free_gib) GiB, age ${AGE_DAYS}d, dry_run=$DRY_RUN)"
 
 # reap() counts failed deletes here. The loops below that call it read from
 # process substitution, not a pipe: a piped loop runs in a subshell and its count
@@ -154,7 +156,8 @@ if [ "$TERRAFORM" = 1 ]; then
       continue
     fi
     [ "$(checkout_kind "$m")" = linked ] || continue
-    recent "$d" "$m" -maxdepth 1 && continue
+    # Providers land deep inside .terraform; module edits show at its top level.
+    { recent "$d" || recent "$m" -maxdepth 1; } && continue
     reap "$d" "terraform, idle ${AGE_DAYS}d+"
   done < <(
     each_dir "$ROOTS" | while IFS= read -r r; do
@@ -176,6 +179,6 @@ if [ -n "$shared_real" ]; then
   fi
 fi
 
-log "done (free $(free_gib) GiB)"
+[ "$FROM_BINARY" = 1 ] || log "done (free $(free_gib) GiB)"
 # Finish every delete first, then report failure so a scheduler shows it.
 [ "$failures" = 0 ] || exit 1
