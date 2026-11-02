@@ -299,6 +299,15 @@ fn r07_dir_whose_age_cannot_be_checked_is_kept() {
     let run = f.run(&["--dry-run"], &[("DRY_RUN", "1")]);
     set_mode(&f.path("tmp/unreadable/locked"), 0o755);
     assert!(run.reaped().is_empty(), "tried to delete: {:?}", run.reaped());
+
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra");
+    fs::create_dir(f.path("git/repo-review/infra/.terraform/locked")).unwrap();
+    f.age("git", 10);
+    set_mode(&f.path("git/repo-review/infra/.terraform/locked"), 0o000);
+    let run = f.run(&["--dry-run"], &[("DRY_RUN", "1")]);
+    set_mode(&f.path("git/repo-review/infra/.terraform/locked"), 0o755);
+    assert!(run.reaped().is_empty(), "tried to delete: {:?}", run.reaped());
 }
 
 #[test]
@@ -327,11 +336,41 @@ fn r08_idle_terraform_dir_in_a_worktree_is_deleted() {
 }
 
 #[test]
+fn r02_terraform_dir_written_anywhere_inside_recently_is_kept() {
+    // `terraform init` writes providers several levels down and leaves `.terraform`
+    // and its direct children untouched.
+    let provider = "git/repo-review/infra/.terraform/providers/registry.terraform.io/hashicorp/aws/6.0.0/darwin_arm64/terraform-provider-aws";
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/infra").write(provider, "x")
+        .age("git", 10)
+        .age(provider, 0);
+    f.run(&[], &[]);
+    assert!(f.exists(provider));
+}
+
+#[test]
+fn r02_terraform_dir_of_a_recently_edited_module_is_kept() {
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/infra").write("git/repo-review/infra/main.tf", "")
+        .age("git", 10)
+        .age("git/repo-review/infra/main.tf", 0);
+    f.run(&[], &[]);
+    assert!(f.exists("git/repo-review/infra/.terraform"));
+}
+
+#[test]
 fn r09_terraform_dir_in_the_main_checkout_is_kept() {
     let f = Fixture::new();
-    f.main_checkout("repo").tf_dir("git/repo/infra").age("git", 10);
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo/infra").tf_dir("git/repo").tf_dir("git/repo-review")
+        .age("git", 10);
     f.run(&[], &[]);
     assert!(f.exists("git/repo/infra/.terraform"));
+    // At a checkout's top level git names the repo's dir relative to it.
+    assert!(f.exists("git/repo/.terraform"));
+    assert!(!f.exists("git/repo-review/.terraform"));
 }
 
 #[test]
@@ -340,10 +379,14 @@ fn r09_terraform_dir_with_local_state_is_kept() {
     f.main_checkout("repo").worktree("repo", "repo-review")
         .tf_dir("git/repo-review/state-file").write("git/repo-review/state-file/terraform.tfstate", "{}")
         .tf_dir("git/repo-review/state-dir").write("git/repo-review/state-dir/terraform.tfstate.d/dev/terraform.tfstate", "{}")
-        .age("git", 10);
+        .tf_dir("git/repo-review/state-link");
+    // A link to state kept elsewhere, currently missing: the state may come back.
+    std::os::unix::fs::symlink("/nonexistent/terraform.tfstate", f.path("git/repo-review/state-link/terraform.tfstate")).unwrap();
+    f.age("git", 10);
     f.run(&[], &[]);
     assert!(f.exists("git/repo-review/state-file/.terraform"));
     assert!(f.exists("git/repo-review/state-dir/.terraform"));
+    assert!(f.exists("git/repo-review/state-link/.terraform"));
 }
 
 #[test]
@@ -354,6 +397,44 @@ fn r09_terraform_dir_with_a_non_default_workspace_is_kept() {
         .age("git", 10);
     f.run(&[], &[]);
     assert!(f.exists("git/repo-review/infra/.terraform"));
+}
+
+#[test]
+fn r09_terraform_dir_whose_workspace_cannot_be_read_is_kept() {
+    if running_as_root() {
+        eprintln!("skipped: root can read everything, so this case can't be set up");
+        return;
+    }
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/infra").write("git/repo-review/infra/.terraform/environment", "staging")
+        .age("git", 10);
+    set_mode(&f.path("git/repo-review/infra/.terraform/environment"), 0o000);
+    let run = f.run(&["--dry-run"], &[("DRY_RUN", "1")]);
+    set_mode(&f.path("git/repo-review/infra/.terraform/environment"), 0o644);
+    assert!(run.reaped().is_empty(), "tried to delete: {:?}", run.reaped());
+}
+
+#[test]
+fn r10_terraform_dir_is_kept_when_git_fails_for_its_repo() {
+    // git runs, but can't read this repo: it can't tell a worktree from a main checkout.
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/infra").tf_dir("git/repo/infra")
+        .main_checkout("other").worktree("other", "other-review").tf_dir("git/other-review/infra")
+        .age("git", 10);
+    let repo = f.path("git/repo");
+    f.git(&["-C", repo.to_str().unwrap(), "config", "core.repositoryformatversion", "1"]);
+    f.git(&["-C", repo.to_str().unwrap(), "config", "extensions.unknownToGit", "true"]);
+    let run = f.run(&[], &[]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(f.exists("git/repo-review/infra/.terraform"));
+    assert!(f.exists("git/repo/infra/.terraform"));
+    assert!(!f.exists("git/other-review/infra/.terraform"), "one broken repo stopped the rest");
+    if testing_binary() {
+        let skip = format!("skip {}: git failed", f.path("git/repo-review/infra/.terraform").display());
+        assert!(run.stdout().contains(&skip), "{}", run.stdout());
+    }
 }
 
 #[test]
@@ -370,6 +451,22 @@ fn r10_terraform_can_be_switched_off() {
     f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra").age("git", 10);
     f.run(&[], &[("REAP_TERRAFORM", "0")]);
     assert!(f.exists("git/repo-review/infra/.terraform"));
+}
+
+#[test]
+fn r12_terraform_switch_is_0_or_1_and_empty_means_on() {
+    for bad in ["yes", "true", "2"] {
+        let f = Fixture::new();
+        f.cargo_dir("tmp/job", "CACHEDIR.TAG").age("tmp", 10);
+        let run = f.run(&[], &[("REAP_TERRAFORM", bad)]);
+        assert_eq!(run.code(), 2, "REAP_TERRAFORM={bad}");
+        assert!(f.exists("tmp/job"), "REAP_TERRAFORM={bad} deleted");
+    }
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra").age("git", 10);
+    let run = f.run(&[], &[("REAP_TERRAFORM", "")]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(!f.exists("git/repo-review/infra/.terraform"));
 }
 
 // --- Shared build-dir ----------------------------------------------------------
@@ -435,6 +532,18 @@ fn r12_shared_cap_too_large_to_compute_stops_before_deleting_anything() {
                             ("REAP_SHARED_CAP_GB", "9999999999999")]);
     assert_eq!(run.code(), 2, "{}", run.stdout());
     assert!(f.exists("shared"));
+}
+
+#[test]
+fn r12_empty_roots_mean_the_default() {
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .cargo_dir("git/repo-review/target", "CACHEDIR.TAG").tf_dir("git/repo-review/infra")
+        .age("git", 10);
+    let run = f.run(&[], &[("REAP_ROOTS", "")]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(!f.exists("git/repo-review/target"));
+    assert!(!f.exists("git/repo-review/infra/.terraform"));
 }
 
 #[test]
@@ -511,6 +620,8 @@ fn r13_failed_terraform_delete_exits_nonzero() {
     let run = f.run(&[], &[]);
     set_mode(&f.path("git/repo-review/infra/.terraform/sealed"), 0o755);
     assert_eq!(run.code(), 1, "{}", run.stdout());
+    let failed = format!(" FAILED  {}", f.path("git/repo-review/infra/.terraform").display());
+    assert!(run.stdout().lines().any(|l| l.get(19..) == Some(failed.as_str())), "{}", run.stdout());
 }
 
 #[test]
@@ -544,6 +655,7 @@ fn r14_dry_run_changes_nothing_but_reports_the_plan() {
 fn report_lines_have_the_stable_format() {
     let f = Fixture::new();
     f.cargo_dir("tmp/job", "CACHEDIR.TAG").age("tmp", 10);
+    f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra").age("git", 10);
     let run = f.run(&[], &[]);
     let lines: Vec<String> = run.stdout().lines().map(str::to_owned).collect();
     assert!(lines.first().is_some_and(|l| l.contains(" start (free ")), "{lines:?}");
@@ -558,9 +670,15 @@ fn report_lines_have_the_stable_format() {
         });
         assert!(shape && l.as_bytes()[19] == b' ', "timestamp: {l}");
     }
+    let mut reaped = run.reaped();
+    reaped.sort_by(|a, b| a.path.cmp(&b.path));
     assert_eq!(
-        run.reaped(),
-        vec![Reaped { path: f.path("tmp/job").to_str().unwrap().to_owned(), reason: "cargo, idle 3d+".into() }]
+        reaped,
+        vec![
+            Reaped { path: f.path("git/repo-review/infra/.terraform").to_str().unwrap().to_owned(),
+                     reason: "terraform, idle 3d+".into() },
+            Reaped { path: f.path("tmp/job").to_str().unwrap().to_owned(), reason: "cargo, idle 3d+".into() },
+        ]
     );
 }
 
@@ -580,6 +698,7 @@ fn r16_refuses_to_start_when_git_cannot_run() {
         let run = f.run(&[], &[("PATH", &path)]);
         assert_eq!(run.code(), 2, "broken_git={}: {}", broken_git.is_some(), run.stdout());
         assert!(f.exists("git/repo/target") && f.exists("tmp/job"), "deleted without git");
+        assert_eq!(run.stdout(), "", "started without git");
     }
 }
 
@@ -626,6 +745,14 @@ fn r18_idle_means_no_write_for_the_full_number_of_days() {
     f.run(&[], &[("REAP_AGE_DAYS", "3")]);
     assert!(f.exists("tmp/h70"), "deleted before 3 full days");
     assert!(!f.exists("tmp/h74"));
+
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .tf_dir("git/repo-review/h70").tf_dir("git/repo-review/h74")
+        .age("git", 10).age_hours("git/repo-review/h70", 70).age_hours("git/repo-review/h74", 74);
+    f.run(&[], &[("REAP_AGE_DAYS", "3")]);
+    assert!(f.exists("git/repo-review/h70/.terraform"), "deleted before 3 full days");
+    assert!(!f.exists("git/repo-review/h74/.terraform"));
 }
 
 #[test]
@@ -635,6 +762,13 @@ fn r19_links_are_not_followed_out_of_a_root() {
     std::os::unix::fs::symlink(f.path("outside"), f.path("git/link")).unwrap();
     f.run(&[], &[]);
     assert!(f.exists("outside/target"));
+
+    // A worktree reached only through a link is outside the roots too.
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "../outside/wt").tf_dir("outside/wt/infra").age("outside", 10);
+    std::os::unix::fs::symlink(f.path("outside"), f.path("git/link")).unwrap();
+    f.run(&[], &[]);
+    assert!(f.exists("outside/wt/infra/.terraform"));
 }
 
 #[test]

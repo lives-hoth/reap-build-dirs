@@ -45,7 +45,8 @@ fn checkout_kind(dir: &Path) -> Option<CheckoutKind>
 ```
 
 ```rust
-// ✅ Being outside a repo is an answer. Git failing is an error, and it stops the run.
+// ✅ Being outside a repo is an answer. Git failing is an error: at startup it stops
+//    the run; for one dir, that dir is kept and the failure is logged.
 enum Checkout {
     Main,
     Linked,

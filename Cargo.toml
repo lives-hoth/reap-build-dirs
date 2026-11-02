@@ -2,7 +2,7 @@
 name = "reap-build-dirs"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Delete stale cargo and Terraform build output from worktrees so they can't fill your disk"
 license = "MIT"
 repository = "https://github.com/lives-hoth/reap-build-dirs"
@@ -12,6 +12,9 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive", "env"] }
+jiff = "0.2"
+rustix = { version = "1", features = ["fs", "process"] }
+walkdir = "2"
 
 [dev-dependencies]
 assert_cmd = "2.2"
