@@ -35,16 +35,38 @@ should make the "delete it" answer impossible to reach by accident.
 
 1. **Shared build-dir** (`r11_…_unless_locked`) — move the size-cap wipe into Rust,
    deciding "in use" by cargo's lock instead of looking for cargo processes.
-2. **Cargo build dirs** (`r03_…`) — move discovery into Rust with
+2. **Cargo build dirs** — move discovery into Rust with
    [`walkdir`](https://docs.rs/walkdir): depth limits, pruning `.git`, `node_modules`,
    `deps` and `incremental`, no symlink following. Treat any walk error as "can't
-   tell, keep it", never skip it. Delete only while holding cargo's build lock, so a
-   build that starts mid-delete waits instead of failing. Before relying on the lock,
-   test what a waiting build does when the dir it waited on is gone; keeping the lock
-   files in place may be safer.
+   tell, keep it", never skip it. Make `terraform::find` the one walk for both, with
+   cargo's markers as its matcher, and share `git::checkout` (cached per worktree)
+   for the main checkout's `target/`.
 3. **Remove the script** — the binary owns every rule; drop `REAP_BIN` from CI.
+4. **Locks and atomic deletes** (`r03_…`, `r24_…`, `r25_…`) — a dir can start being
+   used between being judged idle and being deleted. Close that window for every
+   kind of dir:
+   - Keep a dir any process holds a BSD lock on, the systemd-tmpfiles convention,
+     and hold that lock while deleting. Also take cargo's build lock (`r03`). Before
+     relying on cargo's lock, test what a waiting build does when the dir it waited on
+     is gone; keeping the lock files in place may be safer.
+   - Rename a dir to `<name>.reap-<pid>` beside it before deleting, so a failed
+     delete never leaves a half-deleted cache where tools read it. The next run
+     deletes leftovers.
+
+   This comes after the script is gone, so the spec doesn't need a bash version.
+
+## Watch
+
+- **Cargo's own build-output GC**
+  ([rust-lang/cargo#13136](https://github.com/rust-lang/cargo/issues/13136)). Cargo
+  1.88 cleans its download cache automatically, but not build output. If it starts
+  cleaning `build-dir`, reaping `~/.cargo/build` becomes cargo's job.
 
 ## Not planned
 
 - **The `ignore` crate** — it honors `.gitignore`, and build dirs are always ignored.
 - **Parallel walking** — a daily background job doesn't need it.
+- **Reads as activity (atime)** — unreliable on `noatime`/`relatime` mounts, so whether a
+  dir was used would depend on the machine (`r18_reading_…`).
+- **ctime as activity** — creating anything in a dir already updates that dir's mtime,
+  which the walk sees. ctime would also make test fixtures impossible to age.

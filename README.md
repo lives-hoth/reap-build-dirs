@@ -27,7 +27,12 @@ $ reap-build-dirs --dry-run
 | A shared cargo `build-dir` (not recommended, see below) | `REAP_SHARED_BUILD_DIR`, if you set it | larger than `REAP_SHARED_CAP_GB`, and no cargo or rustc is running |
 
 Everything it deletes is a cache. The next `cargo build` or `terraform init`
-recreates it.
+recreates it. One exception: a backend configured with `-backend-config` flags needs
+those flags again on the next `terraform init`.
+
+Only writes count as activity. A dir that is only read, as by `terraform plan` or a
+`cargo build` with nothing to rebuild, is idle, and the cost of deleting it is one
+rebuild or re-init.
 
 ## What it never touches
 

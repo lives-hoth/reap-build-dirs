@@ -737,6 +737,21 @@ fn r17_another_users_terraform_dir_is_skipped_silently() {
 }
 
 #[test]
+fn r18_reading_a_dir_is_not_activity() {
+    // Only writes count: a dir that is only read, as by `terraform plan` or a no-op
+    // `cargo build`, is idle. Recreating it costs a rebuild or a `terraform init`.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/job", "CACHEDIR.TAG").age("tmp", 10);
+    f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra").age("git", 10);
+    for read in ["tmp/job/debug/deps/libfoo.rlib", "git/repo-review/infra/.terraform/providers/provider-bin"] {
+        filetime::set_file_atime(f.path(read), FileTime::now()).unwrap();
+    }
+    f.run(&[], &[]);
+    assert!(!f.exists("tmp/job"));
+    assert!(!f.exists("git/repo-review/infra/.terraform"));
+}
+
+#[test]
 fn r18_idle_means_no_write_for_the_full_number_of_days() {
     // Same boundary on every OS: BSD and GNU find round -mtime differently.
     let f = Fixture::new();
@@ -809,6 +824,59 @@ fn r23_worktree_nested_inside_the_main_checkout_is_a_worktree() {
     assert_eq!(run.code(), 0, "{}", run.stdout());
     assert!(f.exists("git/repo/target"), "main checkout's target/ deleted");
     assert!(!f.exists("git/repo/.worktrees/pr1/target"), "nested worktree's target/ kept");
+}
+
+// --- Deleting safely while other tools run ---------------------------------------
+
+#[test]
+#[ignore = "not built yet: keep a dir that any process holds a BSD lock on"]
+fn r24_dir_locked_by_any_process_is_kept() {
+    // The systemd-tmpfiles convention: a tool keeps its dir by holding flock on it. The
+    // reaper also holds that lock while deleting, so the tool waits instead of failing.
+    use rustix::fs::{FlockOperation, flock};
+    let f = Fixture::new();
+    f.cargo_dir("tmp/job", "CACHEDIR.TAG").age("tmp", 10);
+    f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra").age("git", 10);
+    let locks: Vec<fs::File> = ["tmp/job", "git/repo-review/infra/.terraform"].iter().map(|d| {
+        let dir = fs::File::open(f.path(d)).unwrap();
+        flock(&dir, FlockOperation::NonBlockingLockExclusive).unwrap();
+        dir
+    }).collect();
+    let run = f.run(&[], &[]);
+    drop(locks);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(f.exists("tmp/job"));
+    assert!(f.exists("git/repo-review/infra/.terraform"));
+}
+
+#[test]
+#[ignore = "not built yet: rename a dir aside before deleting it"]
+fn r25_failed_delete_leaves_nothing_at_the_original_path() {
+    // A half-deleted cache at its real path is worse than none: the next build or
+    // `terraform init` reads it. Renamed first, a failure leaves the remains aside.
+    if running_as_root() {
+        eprintln!("skipped: root can delete anything");
+        return;
+    }
+    let f = Fixture::new();
+    f.cargo_dir("tmp/stuck", "CACHEDIR.TAG").write("tmp/stuck/sealed/file", "x").age("tmp", 10);
+    set_mode(&f.path("tmp/stuck/sealed"), 0o555);
+    let run = f.run(&[], &[]);
+    let leftovers: Vec<PathBuf> = fs::read_dir(f.path("tmp")).unwrap().map(|e| e.unwrap().path())
+        .filter(|p| p.file_name().unwrap().to_str().unwrap().starts_with("stuck.reap-")).collect();
+    for l in &leftovers {
+        set_mode(&l.join("sealed"), 0o755);
+    }
+    assert_eq!(run.code(), 1, "{}", run.stdout());
+    assert!(!f.exists("tmp/stuck"), "half-deleted dir left at its path");
+    assert_eq!(leftovers.len(), 1, "{leftovers:?}");
+    let failed = format!(" FAILED  {}", f.path("tmp/stuck").display());
+    assert!(run.stdout().lines().any(|l| l.get(19..) == Some(failed.as_str())), "{}", run.stdout());
+
+    // The next run finishes the job, whatever the remains' age.
+    let run = f.run(&[], &[]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(!leftovers[0].exists());
 }
 
 #[test]

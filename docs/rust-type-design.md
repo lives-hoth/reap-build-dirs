@@ -130,6 +130,7 @@ enum Reason {
 | must satisfy an invariant | make the invalid state unrepresentable, don't assert it |
 | is a trait method every implementor must choose | required, never defaulted |
 | can fail in a way that changes the decision | a variant that decides toward *keep* |
+| decides an action that happens later | hold what it was decided from (a lock) until the action is done, or re-check |
 
 Reviews check new fields, parameters, and returns against this. Raising it on an
 existing offender is welcome; rewriting unrelated code to match it in the same change
