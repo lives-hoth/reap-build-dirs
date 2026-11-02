@@ -7,7 +7,8 @@ use std::path::PathBuf;
 
 use crate::log;
 
-/// A dir to delete, and why. Only the rules that decide deletion construct one.
+/// A dir to delete, and why. The reaper deletes whatever it is handed, so build one
+/// only where a rule has decided the dir goes.
 pub struct Reap {
     pub dir: PathBuf,
     pub reason: Reason,

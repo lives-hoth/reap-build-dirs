@@ -17,7 +17,7 @@ should make the "delete it" answer impossible to reach by accident.
   over the variable, the variable over the default. Invalid values stop the run
   before anything is deleted.
 - **Exit code** (`r13_…`) — exit 1 when any delete failed, after finishing the rest.
-  Implemented in the script, where deleting still happens; it moves to Rust with step 2.
+  The binary decides it from its own deletes and the script's exit code.
 - **Environment it can't assume** (`r16_…` to `r21_…`) — refuse to start when git can't
   run; skip other users' dirs; pin the idle boundary, link handling, spaces and nested
   dirs so the Rust discovery has to reproduce them. Worktrees nested inside a main

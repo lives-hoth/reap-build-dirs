@@ -9,15 +9,19 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::activity::{Activity, activity};
-use crate::git::{self, Checkout};
+use crate::activity::{Activity, Depth, activity};
+use crate::git::{self, Checkout, GitFailed};
+use crate::log;
 use crate::reap::{Reap, Reason, Reaper};
 
 pub fn reap_idle(roots: &[PathBuf], age: NonZeroU32, reaper: &mut Reaper) {
     for root in roots {
         for dir in find(root) {
-            if let Ok(r) = verdict(dir, age) {
-                reaper.reap(r);
+            match verdict(&dir, age) {
+                Ok(r) => reaper.reap(r),
+                // Kept. Logged, so a broken repo doesn't look like nothing to do.
+                Err(Keep::GitFailed(why)) => log::line(format_args!("skip {}: git failed ({why})", dir.display())),
+                Err(_) => {}
             }
         }
     }
@@ -54,15 +58,22 @@ enum Keep {
     /// Re-init would quietly switch back to `default`, so a later apply could hit the
     /// wrong environment.
     Workspace,
-    /// A main checkout's, outside any repo, or git couldn't say.
-    NotLinked,
+    /// Its owner or workspace couldn't be read.
+    Unreadable,
+    /// The main checkout's build state is worth keeping.
+    MainCheckout,
+    OutsideRepo,
+    /// git couldn't tell a worktree from a main checkout.
+    GitFailed(String),
     Active,
 }
 
-fn verdict(dir: PathBuf, age: NonZeroU32) -> Result<Reap, Keep> {
-    let module = dir.parent().expect("found under a root").to_owned();
-    if !fs::symlink_metadata(&dir).is_ok_and(|m| m.uid() == rustix::process::geteuid().as_raw()) {
-        return Err(Keep::OtherUser);
+fn verdict(dir: &Path, age: NonZeroU32) -> Result<Reap, Keep> {
+    let module = dir.parent().expect("found under a root");
+    match fs::symlink_metadata(dir) {
+        Ok(m) if m.uid() == rustix::process::geteuid().as_raw() => {}
+        Ok(_) => return Err(Keep::OtherUser),
+        Err(_) => return Err(Keep::Unreadable),
     }
     if may_exist(&module.join("terraform.tfstate")) || may_exist(&module.join("terraform.tfstate.d")) {
         return Err(Keep::LocalState);
@@ -70,18 +81,22 @@ fn verdict(dir: PathBuf, age: NonZeroU32) -> Result<Reap, Keep> {
     match fs::read_to_string(dir.join("environment")) {
         Err(e) if e.kind() == ErrorKind::NotFound => {}
         Ok(name) if name.trim_end_matches('\n') == "default" => {}
-        _ => return Err(Keep::Workspace),
+        Ok(_) => return Err(Keep::Workspace),
+        Err(_) => return Err(Keep::Unreadable),
     }
-    if !matches!(git::checkout(&module), Ok(Checkout::Linked)) {
-        return Err(Keep::NotLinked);
+    match git::checkout(module) {
+        Ok(Checkout::Linked) => {}
+        Ok(Checkout::Main) => return Err(Keep::MainCheckout),
+        Ok(Checkout::Outside) => return Err(Keep::OutsideRepo),
+        Err(GitFailed(why)) => return Err(Keep::GitFailed(why)),
     }
     // Providers land deep inside .terraform; module edits show at its top level.
-    if !matches!(activity(&dir, usize::MAX, age), Activity::Idle)
-        || !matches!(activity(&module, 1, age), Activity::Idle)
+    if !matches!(activity(dir, Depth::All, age), Activity::Idle)
+        || !matches!(activity(module, Depth::TopLevel, age), Activity::Idle)
     {
         return Err(Keep::Active);
     }
-    Ok(Reap { dir, reason: Reason::TerraformIdle(age) })
+    Ok(Reap { dir: dir.to_owned(), reason: Reason::TerraformIdle(age) })
 }
 
 /// False only when the path is certainly absent.

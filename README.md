@@ -40,7 +40,9 @@ recreates it.
 - **Other users' dirs.** Only dirs owned by the user running it are considered, so a
   shared `/tmp` doesn't produce a failed delete every day.
 - **Anything at all if git can't run.** git is what tells a main checkout from a
-  worktree, so without it the run stops before deleting anything.
+  worktree, so without it the run stops before deleting anything. If git fails for
+  one repo, its `.terraform` dirs are kept and the failure is logged as
+  `skip <path>: git failed (<reason>)`.
 - **Anything it can't fully inspect.** If checking a dir's age fails, for example
   because a subfolder is unreadable, the dir is kept. An invalid setting stops the
   run before anything is deleted.
@@ -91,7 +93,7 @@ journalctl --user -u reap-build-dirs     # the log
 | `REAP_ROOTS` | `$HOME/git` | Colon-separated dirs where your checkouts live |
 | `REAP_TEMP_ROOTS` | `/tmp`, `$TMPDIR`, and on macOS the per-user temp dir | Colon-separated temp dirs, searched 4 levels deep |
 | `REAP_AGE_DAYS` | `3` | Days without writes before a dir is deleted (a whole number, at least 1) |
-| `REAP_TERRAFORM` | `1` | Set to `0` to leave `.terraform` dirs alone |
+| `REAP_TERRAFORM` | `1` | `0` leaves `.terraform` dirs alone; any value but `0` or `1` stops the run |
 | `REAP_SHARED_BUILD_DIR` | unset | A cargo `build-dir` shared across workspaces |
 | `REAP_SHARED_CAP_GB` | `100` | Size at which the shared build-dir is wiped |
 | `DRY_RUN` | `0` | `1` reports without deleting, same as `--dry-run` |

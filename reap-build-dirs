@@ -24,7 +24,7 @@ Environment:
                          (default: /tmp, $TMPDIR and, on macOS, the
                          per-user temp dir)
   REAP_AGE_DAYS          idle days before a dir is deleted, at least 1  (default: 3)
-  REAP_TERRAFORM         0 to skip .terraform dirs  (default: 1)
+  REAP_TERRAFORM         0 to skip .terraform dirs, 1 to include them  (default: 1)
   REAP_SHARED_BUILD_DIR  a cargo build-dir shared across workspaces  (default: unset)
   REAP_SHARED_CAP_GB     size that triggers wiping it  (default: 100)
   DRY_RUN                1 to report without deleting  (same as --dry-run)
@@ -52,6 +52,7 @@ die() { echo "reap-build-dirs: $*" >&2; exit 2; }
 # A bad age reaches find as an invalid -mtime, which would make every dir look
 # idle. Refuse to start instead.
 case "$AGE_DAYS" in ''|*[!0-9]*|0) die "REAP_AGE_DAYS must be a whole number of days, at least 1 (got '$AGE_DAYS')" ;; esac
+case "$TERRAFORM" in 0|1) ;; *) die "REAP_TERRAFORM must be 0 or 1 (got '$TERRAFORM')" ;; esac
 case "$SHARED_CAP_GB" in ''|*[!0-9]*) die "REAP_SHARED_CAP_GB must be a whole number (got '$SHARED_CAP_GB')" ;; esac
 # Leading zeros would make bash read the number as octal. Past 9 digits the cap in
 # KB overflows bash's 64-bit arithmetic and wraps negative, which would wipe.
@@ -149,7 +150,8 @@ if [ "$TERRAFORM" = 1 ]; then
   while IFS= read -r d; do
     [ -O "$d" ] || continue                     # another user's: theirs to clean up
     m=$(dirname "$d")
-    [ -e "$m/terraform.tfstate" ] || [ -d "$m/terraform.tfstate.d" ] && continue   # local state
+    # Local state. A dangling link may point at state that comes back.
+    [ -e "$m/terraform.tfstate" ] || [ -L "$m/terraform.tfstate" ] || [ -d "$m/terraform.tfstate.d" ] && continue
     # Re-init would silently switch back to `default`, so a later apply could
     # hit the wrong workspace.
     if [ -f "$d/environment" ] && [ "$(cat "$d/environment")" != default ]; then

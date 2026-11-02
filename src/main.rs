@@ -52,9 +52,8 @@ struct Args {
     no_terraform: bool,
 
     /// `REAP_TERRAFORM=0` is the same as --no-terraform
-    #[arg(long, env = "REAP_TERRAFORM", hide = true, default_value_t = true,
-          value_parser = clap::builder::BoolishValueParser::new(),
-          action = clap::ArgAction::Set)]
+    #[arg(long, env = "REAP_TERRAFORM", hide = true, default_value = "1",
+          value_parser = zero_or_one, action = clap::ArgAction::Set)]
     terraform: bool,
 
     /// A cargo build-dir shared across workspaces, wiped whole past the cap
@@ -76,7 +75,8 @@ fn main() -> ExitCode {
     }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let free = || log::free_gib(home.as_deref().unwrap_or("/".as_ref()));
-    let roots = match &args.roots {
+    // Empty means the default, as in the script.
+    let roots = match args.roots.as_deref().filter(|r| !r.is_empty()) {
         Some(list) => existing_dirs(list),
         None => existing_dirs(&home.as_ref().map(|h| h.join("git").display().to_string()).unwrap_or_default()),
     };
@@ -132,6 +132,15 @@ fn run_script(args: &Args) -> Command {
         };
     }
     script
+}
+
+/// `1` or `0`; empty means the default, as in the script.
+fn zero_or_one(v: &str) -> Result<bool, String> {
+    match v {
+        "1" | "" => Ok(true),
+        "0" => Ok(false),
+        _ => Err(String::from("must be 0 or 1")),
+    }
 }
 
 /// The dirs in a colon-separated list that exist, resolved and without duplicates.
