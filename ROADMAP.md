@@ -33,18 +33,33 @@ should make the "delete it" answer impossible to reach by accident.
 
 ## Next
 
-1. **Shared build-dir** (`r11_…_unless_locked`) — move the size-cap wipe into Rust,
-   deciding "in use" by cargo's lock instead of looking for cargo processes.
-2. **Cargo build dirs** (`r03_…`) — move discovery into Rust with
+1. **Shared build-dir** — move the size-cap wipe into Rust. Its "in use" check moves
+   to cargo's lock in step 4 (`r11_…_unless_locked`).
+2. **Cargo build dirs** — move discovery into Rust with
    [`walkdir`](https://docs.rs/walkdir): depth limits, pruning `.git`, `node_modules`,
    `deps` and `incremental`, no symlink following. Treat any walk error as "can't
-   tell, keep it", never skip it. Delete only while holding cargo's build lock, so a
-   build that starts mid-delete waits instead of failing. Before relying on the lock,
-   test what a waiting build does when the dir it waited on is gone; keeping the lock
-   files in place may be safer.
+   tell, keep it", never skip it. Make `terraform::find` the one walk for both, with
+   cargo's markers as its matcher, and share `git::checkout` (cached per worktree)
+   for the main checkout's `target/`.
 3. **Remove the script** — the binary owns every rule; drop `REAP_BIN` from CI.
+4. **Locks and atomic deletes** (`r03_…`, `r11_…_unless_locked`, `r24_…`, `r25_…`) — close
+   the window between judging a dir idle and deleting it, for every kind of dir. Leftover
+   `.reap-*` dirs are one more kind in the step-2 walk, never kept. Before relying on
+   cargo's lock, test what a waiting build does when the dir it waited on is gone;
+   keeping the lock files in place may be safer.
+
+## Watch
+
+- **Cargo's own build-output GC**
+  ([rust-lang/cargo#13136](https://github.com/rust-lang/cargo/issues/13136)). Cargo
+  1.88 cleans its download cache automatically, but not build output. If it starts
+  cleaning `build-dir`, reaping `~/.cargo/build` becomes cargo's job.
 
 ## Not planned
 
 - **The `ignore` crate** — it honors `.gitignore`, and build dirs are always ignored.
 - **Parallel walking** — a daily background job doesn't need it.
+- **Reads as activity (atime)** — unreliable on `noatime`/`relatime` mounts, so whether a
+  dir was used would depend on the machine (`r18_reading_…`).
+- **ctime as activity** — creating anything in a dir already updates that dir's mtime,
+  which the walk sees. ctime would also make test fixtures impossible to age.
