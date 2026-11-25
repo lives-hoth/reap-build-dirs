@@ -72,6 +72,8 @@ impl Fixture {
             // Otherwise `commit` starts a detached `git maintenance`, whose lock files
             // can vanish while a test walks the tree to age it.
             .args(["-c", "maintenance.auto=false"])
+            // A global commit.gpgsign would prompt for a key passphrase.
+            .args(["-c", "commit.gpgsign=false"])
             .args(args)
             .output()
             .expect("run git")
