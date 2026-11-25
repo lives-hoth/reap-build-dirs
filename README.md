@@ -30,9 +30,8 @@ Everything it deletes is a cache. The next `cargo build` or `terraform init`
 recreates it. One exception: a backend configured with `-backend-config` flags needs
 those flags again on the next `terraform init`.
 
-Only writes count as activity. A dir that is only read, as by `terraform plan` or a
-`cargo build` with nothing to rebuild, is idle, and the cost of deleting it is one
-rebuild or re-init.
+Reads don't count: a dir only read, as by `terraform plan` or a no-op `cargo build`,
+is idle.
 
 ## What it never touches
 

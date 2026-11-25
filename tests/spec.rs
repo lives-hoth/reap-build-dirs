@@ -180,6 +180,11 @@ impl Run {
     fn reaped_paths(&self) -> Vec<String> {
         self.reaped().into_iter().map(|r| r.path).collect()
     }
+    /// Whether the report has `<date> <time> FAILED  <path>` for `path`.
+    fn failed(&self, path: &Path) -> bool {
+        let failed = format!("FAILED  {}", path.display());
+        self.stdout().lines().any(|l| l.get(20..) == Some(failed.as_str()))
+    }
 }
 
 fn parse_reaped(line: &str) -> Option<Reaped> {
@@ -620,8 +625,7 @@ fn r13_failed_terraform_delete_exits_nonzero() {
     let run = f.run(&[], &[]);
     set_mode(&f.path("git/repo-review/infra/.terraform/sealed"), 0o755);
     assert_eq!(run.code(), 1, "{}", run.stdout());
-    let failed = format!(" FAILED  {}", f.path("git/repo-review/infra/.terraform").display());
-    assert!(run.stdout().lines().any(|l| l.get(19..) == Some(failed.as_str())), "{}", run.stdout());
+    assert!(run.failed(&f.path("git/repo-review/infra/.terraform")), "{}", run.stdout());
 }
 
 #[test]
@@ -870,8 +874,7 @@ fn r25_failed_delete_leaves_nothing_at_the_original_path() {
     assert_eq!(run.code(), 1, "{}", run.stdout());
     assert!(!f.exists("tmp/stuck"), "half-deleted dir left at its path");
     assert_eq!(leftovers.len(), 1, "{leftovers:?}");
-    let failed = format!(" FAILED  {}", f.path("tmp/stuck").display());
-    assert!(run.stdout().lines().any(|l| l.get(19..) == Some(failed.as_str())), "{}", run.stdout());
+    assert!(run.failed(&f.path("tmp/stuck")), "{}", run.stdout());
 
     // The next run finishes the job, whatever the remains' age.
     let run = f.run(&[], &[]);

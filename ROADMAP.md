@@ -33,8 +33,8 @@ should make the "delete it" answer impossible to reach by accident.
 
 ## Next
 
-1. **Shared build-dir** (`r11_…_unless_locked`) — move the size-cap wipe into Rust,
-   deciding "in use" by cargo's lock instead of looking for cargo processes.
+1. **Shared build-dir** — move the size-cap wipe into Rust. Its "in use" check moves
+   to cargo's lock in step 4 (`r11_…_unless_locked`).
 2. **Cargo build dirs** — move discovery into Rust with
    [`walkdir`](https://docs.rs/walkdir): depth limits, pruning `.git`, `node_modules`,
    `deps` and `incremental`, no symlink following. Treat any walk error as "can't
@@ -42,18 +42,11 @@ should make the "delete it" answer impossible to reach by accident.
    cargo's markers as its matcher, and share `git::checkout` (cached per worktree)
    for the main checkout's `target/`.
 3. **Remove the script** — the binary owns every rule; drop `REAP_BIN` from CI.
-4. **Locks and atomic deletes** (`r03_…`, `r24_…`, `r25_…`) — a dir can start being
-   used between being judged idle and being deleted. Close that window for every
-   kind of dir:
-   - Keep a dir any process holds a BSD lock on, the systemd-tmpfiles convention,
-     and hold that lock while deleting. Also take cargo's build lock (`r03`). Before
-     relying on cargo's lock, test what a waiting build does when the dir it waited on
-     is gone; keeping the lock files in place may be safer.
-   - Rename a dir to `<name>.reap-<pid>` beside it before deleting, so a failed
-     delete never leaves a half-deleted cache where tools read it. The next run
-     deletes leftovers.
-
-   This comes after the script is gone, so the spec doesn't need a bash version.
+4. **Locks and atomic deletes** (`r03_…`, `r11_…_unless_locked`, `r24_…`, `r25_…`) — close
+   the window between judging a dir idle and deleting it, for every kind of dir. Leftover
+   `.reap-*` dirs are one more kind in the step-2 walk, never kept. Before relying on
+   cargo's lock, test what a waiting build does when the dir it waited on is gone;
+   keeping the lock files in place may be safer.
 
 ## Watch
 
