@@ -18,14 +18,9 @@
     <string>__HOME__/git:__HOME__/.cargo/build</string>
     -->
   </dict>
-  <!-- Daily at 04:30; if the Mac was asleep, launchd runs it once on wake. -->
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key>
-    <integer>4</integer>
-    <key>Minute</key>
-    <integer>30</integer>
-  </dict>
+  <!-- Hourly, so low-disk mode acts within the hour; launchd never overlaps runs. -->
+  <key>StartInterval</key>
+  <integer>3600</integer>
   <key>ProcessType</key>
   <string>Background</string>
   <key>LowPriorityIO</key>

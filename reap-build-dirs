@@ -24,6 +24,11 @@ Environment:
                          (default: /tmp, $TMPDIR and, on macOS, the
                          per-user temp dir)
   REAP_AGE_DAYS          idle days before a dir is deleted, at least 1  (default: 3)
+  REAP_LOW_FREE_GB       below this much free disk, cargo build dirs are deleted
+                         after REAP_LOW_FREE_AGE_HOURS instead; 0 turns it off
+                         (default: 150)
+  REAP_LOW_FREE_AGE_HOURS  idle hours before a cargo build dir is deleted when
+                         the disk is low, at least 1  (default: 6)
   REAP_TERRAFORM         0 to skip .terraform dirs, 1 to include them  (default: 1)
   REAP_SHARED_BUILD_DIR  a cargo build-dir shared across workspaces  (default: unset)
   REAP_SHARED_CAP_GB     size that triggers wiping it  (default: 100)
@@ -47,28 +52,39 @@ TEMP_ROOTS=${REAP_TEMP_ROOTS:-/tmp:${TMPDIR:-}:$(getconf DARWIN_USER_TEMP_DIR 2>
 TERRAFORM=${REAP_TERRAFORM:-1}
 SHARED_DIR=${REAP_SHARED_BUILD_DIR:-}
 SHARED_CAP_GB=${REAP_SHARED_CAP_GB:-100}
+LOW_FREE_GB=${REAP_LOW_FREE_GB:-150}
+LOW_FREE_AGE_HOURS=${REAP_LOW_FREE_AGE_HOURS:-6}
 
 die() { echo "reap-build-dirs: $*" >&2; exit 2; }
-# A bad age reaches find as an invalid -mtime, which would make every dir look
-# idle. Refuse to start instead.
-case "$AGE_DAYS" in ''|*[!0-9]*|0) die "REAP_AGE_DAYS must be a whole number of days, at least 1 (got '$AGE_DAYS')" ;; esac
 case "$TERRAFORM" in 0|1) ;; *) die "REAP_TERRAFORM must be 0 or 1 (got '$TERRAFORM')" ;; esac
-case "$SHARED_CAP_GB" in ''|*[!0-9]*) die "REAP_SHARED_CAP_GB must be a whole number (got '$SHARED_CAP_GB')" ;; esac
-# Leading zeros would make bash read the number as octal. Past 9 digits the cap in
-# KB overflows bash's 64-bit arithmetic and wraps negative, which would wipe.
-cap=${SHARED_CAP_GB#"${SHARED_CAP_GB%%[!0]*}"}
-[ ${#cap} -le 9 ] || die "REAP_SHARED_CAP_GB must be at most 999999999 (got '$SHARED_CAP_GB')"
-SHARED_CAP_GB=${cap:-0}
+# Leading zeros would make bash read a number as octal. Past 9 digits a size in KB
+# overflows bash's 64-bit arithmetic and wraps negative. A bad age would reach find
+# as an invalid -mmin and make every dir look idle.
+whole_num() { # $1 = variable name, $2 = value, $3 = minimum; prints it without leading zeros
+  case "$2" in ''|*[!0-9]*) die "$1 must be a whole number, at least $3 (got '$2')" ;; esac
+  local n=${2#"${2%%[!0]*}"}
+  [ ${#n} -le 9 ] || die "$1 must be at most 999999999 (got '$2')"
+  [ "${n:-0}" -ge "$3" ] || die "$1 must be a whole number, at least $3 (got '$2')"
+  echo "${n:-0}"
+}
+AGE_DAYS=$(whole_num REAP_AGE_DAYS "$AGE_DAYS" 1) || exit 2
+SHARED_CAP_GB=$(whole_num REAP_SHARED_CAP_GB "$SHARED_CAP_GB" 0) || exit 2
+LOW_FREE_GB=$(whole_num REAP_LOW_FREE_GB "$LOW_FREE_GB" 0) || exit 2
+LOW_FREE_AGE_HOURS=$(whole_num REAP_LOW_FREE_AGE_HOURS "$LOW_FREE_AGE_HOURS" 1) || exit 2
 # git tells a main checkout from a worktree. Without it a main checkout's target/
 # would look unprotected, so don't run at all.
 git --version >/dev/null 2>&1 || die "git must be runnable to recognize main checkouts ('git --version' failed)"
 
 log() { echo "$(date '+%F %T') $*"; }
 gib() { awk -v k="$1" 'BEGIN { printf "%.1f", k / 1048576 }'; }
-free_gib() { gib "$(df -Pk "$HOME" | awk 'NR==2 {print $4}')"; }
-recent() { # true if anything was written recently, or if find can't tell
-  local out
-  out=$(find "$@" -mtime -"$AGE_DAYS" -print -quit 2>/dev/null) || return 0
+free_kb() { df -Pk "$HOME" | awk 'NR==2 {print $4}'; }
+free_gib() { gib "$(free_kb)"; }
+# Minutes, not -mtime days: BSD and GNU find round days differently, and low-disk
+# mode needs hours.
+recent() { # $1 = minutes, $2.. = find args; true if anything was written in that
+           # time, or if find can't tell
+  local min=$1 out; shift
+  out=$(find "$@" -mmin -"$min" -print -quit 2>/dev/null) || return 0
   [ -n "$out" ]
 }
 each_dir() { # split a colon list, keeping only existing dirs
@@ -109,7 +125,9 @@ main_checkout_root() {
 # miss custom build dirs and hit crate sources that contain a `target/` module.
 cargo_candidates() { # $1 = root, $2.. = extra find args
   local root=$1; shift
-  find "$root" "$@" \( -name .git -o -name node_modules -o -name deps -o -name incremental \) -prune \
+  # debug/build holds one dir per crate in cargo's newer layout: thousands, no markers.
+  find "$root" "$@" \( -name .git -o -name node_modules -o -name deps -o -name incremental \
+      -o -path '*/debug/build' -o -path '*/release/build' \) -prune \
     -o \( -name CACHEDIR.TAG -o -name .rustc_info.json \) -print 2>/dev/null \
     | grep -v '/registry/src/' | while IFS= read -r f; do dirname "$f"; done
 }
@@ -119,24 +137,37 @@ shared_real=""
 
 # Run from the binary, which logs the start and done lines itself.
 FROM_BINARY=${REAP_FROM_BINARY:-0}
-[ "$FROM_BINARY" = 1 ] || log "start (free $(free_gib) GiB, age ${AGE_DAYS}d, dry_run=$DRY_RUN)"
+free_at_start=$(free_kb)
+[ "$FROM_BINARY" = 1 ] || log "start (free $(gib "$free_at_start") GiB, age ${AGE_DAYS}d, dry_run=$DRY_RUN)"
 
 # reap() counts failed deletes here. The loops below that call it read from
 # process substitution, not a pipe: a piped loop runs in a subshell and its count
 # would be lost.
 failures=0
 
+age_min=$((AGE_DAYS * 1440))
+# Low on disk: cargo build dirs go after hours instead of days. Only ever lower.
+cargo_min=$age_min cargo_reason="cargo, idle ${AGE_DAYS}d+"
+if [ "$LOW_FREE_GB" -gt 0 ] && [ "$free_at_start" -lt $((LOW_FREE_GB * 1048576)) ] &&
+   [ $((LOW_FREE_AGE_HOURS * 60)) -lt "$age_min" ]; then
+  log "low disk (free $(gib "$free_at_start") GiB < ${LOW_FREE_GB} GiB): cargo build dirs idle ${LOW_FREE_AGE_HOURS}h+ are deleted"
+  cargo_min=$((LOW_FREE_AGE_HOURS * 60)) cargo_reason="cargo, idle ${LOW_FREE_AGE_HOURS}h+, low disk"
+fi
+
 # Shortest paths first, so a nested build dir is skipped once its parent is gone.
 while IFS= read -r d; do
   [ -d "$d" ] || continue
   [ -O "$d" ] || continue                       # another user's: theirs to clean up
   case "$d" in "$shared_real"|"$shared_real"/*) [ -n "$shared_real" ] && continue ;; esac
-  { [ -d "$d/debug/deps" ] || [ -d "$d/release/deps" ]; } || continue
+  # deps/ until Rust 1.100; build/ in the layout that replaced it.
+  is_build=0
+  for p in "$d"/{debug,release}/{deps,build}; do [ -d "$p" ] && is_build=1 && break; done
+  [ "$is_build" = 1 ] || continue
   if [ "$(basename "$d")" = target ] && main_checkout_root "$(dirname "$d")"; then
     continue                                    # main checkout's incremental state
   fi
-  recent "$d" && continue
-  reap "$d" "cargo, idle ${AGE_DAYS}d+"
+  recent "$cargo_min" "$d" && continue
+  reap "$d" "$cargo_reason"
 done < <(
   {
     each_dir "$ROOTS" | while IFS= read -r r; do cargo_candidates "$r"; done
@@ -159,7 +190,7 @@ if [ "$TERRAFORM" = 1 ]; then
     fi
     [ "$(checkout_kind "$m")" = linked ] || continue
     # Providers land deep inside .terraform; module edits show at its top level.
-    { recent "$d" || recent "$m" -maxdepth 1; } && continue
+    { recent "$age_min" "$d" || recent "$age_min" "$m" -maxdepth 1; } && continue
     reap "$d" "terraform, idle ${AGE_DAYS}d+"
   done < <(
     each_dir "$ROOTS" | while IFS= read -r r; do

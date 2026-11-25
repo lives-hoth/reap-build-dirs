@@ -47,6 +47,18 @@ struct Args {
     #[arg(long, env = "REAP_AGE_DAYS", default_value_t = NonZeroU32::new(3).unwrap())]
     age_days: NonZeroU32,
 
+    /// Below this much free disk in GB, cargo build dirs are deleted after
+    /// --low-free-age-hours instead; 0 turns it off
+    // Bounded to match the script, whose 64-bit arithmetic overflows past this.
+    #[arg(long, env = "REAP_LOW_FREE_GB", default_value_t = 150,
+          value_parser = clap::value_parser!(u32).range(..=999_999_999))]
+    low_free_gb: u32,
+
+    /// Hours without writes before a cargo build dir is deleted when the disk is low
+    #[arg(long, env = "REAP_LOW_FREE_AGE_HOURS", default_value_t = 6,
+          value_parser = clap::value_parser!(u32).range(1..=999_999_999))]
+    low_free_age_hours: u32,
+
     /// Leave .terraform dirs alone [env: REAP_TERRAFORM=0]
     #[arg(long)]
     no_terraform: bool,
@@ -121,6 +133,8 @@ fn run_script(args: &Args) -> Command {
         .env("REAP_TERRAFORM", "0")
         .env("REAP_AGE_DAYS", args.age_days.to_string())
         .env("REAP_SHARED_CAP_GB", args.shared_cap_gb.to_string())
+        .env("REAP_LOW_FREE_GB", args.low_free_gb.to_string())
+        .env("REAP_LOW_FREE_AGE_HOURS", args.low_free_age_hours.to_string())
         .env("REAP_TEMP_ROOTS", args.temp_roots.clone().unwrap_or_else(default_temp_roots));
     for (name, value) in [
         ("REAP_ROOTS", &args.roots),

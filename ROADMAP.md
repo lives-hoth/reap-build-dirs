@@ -31,13 +31,19 @@ should make the "delete it" answer impossible to reach by accident.
   `getconf DARWIN_USER_TEMP_DIR`, not only from `$TMPDIR`, which cron or a wrapper
   script may not set (launchd does).
 
+- **Cargo 1.100 layout** (`r07_…new_cargo_layout…`) — a build dir is confirmed by
+  `deps/` or `build/` under `debug/` or `release/`; 1.100 dropped `deps/`.
+- **Low disk** (`r26_…`) — under `REAP_LOW_FREE_GB` free, cargo build dirs go after
+  `REAP_LOW_FREE_AGE_HOURS`. Decided in the script; moves to Rust with cargo discovery.
+
 ## Next
 
 1. **Shared build-dir** — move the size-cap wipe into Rust. Its "in use" check moves
    to cargo's lock in step 4 (`r11_…_unless_locked`).
 2. **Cargo build dirs** — move discovery into Rust with
    [`walkdir`](https://docs.rs/walkdir): depth limits, pruning `.git`, `node_modules`,
-   `deps` and `incremental`, no symlink following. Treat any walk error as "can't
+   `deps`, `incremental` and `{debug,release}/build` (1.100's per-crate dirs), confirming
+   by `deps/` or `build/`, no symlink following. Treat any walk error as "can't
    tell, keep it", never skip it. Make `terraform::find` the one walk for both, with
    cargo's markers as its matcher, and share `git::checkout` (cached per worktree)
    for the main checkout's `target/`.
@@ -58,7 +64,7 @@ should make the "delete it" answer impossible to reach by accident.
 ## Not planned
 
 - **The `ignore` crate** — it honors `.gitignore`, and build dirs are always ignored.
-- **Parallel walking** — a daily background job doesn't need it.
+- **Parallel walking** — an hourly background job doesn't need it.
 - **Reads as activity (atime)** — unreliable on `noatime`/`relatime` mounts, so whether a
   dir was used would depend on the machine (`r18_reading_…`).
 - **ctime as activity** — creating anything in a dir already updates that dir's mtime,
