@@ -39,6 +39,11 @@ fn running_as_root() -> bool {
     String::from_utf8_lossy(&out.stdout).trim() == "0"
 }
 
+/// Every setting the implementations read, cleared so the caller's can't leak in.
+const SETTINGS: &[&str] = &["REAP_ROOTS", "REAP_TEMP_ROOTS", "REAP_AGE_DAYS", "REAP_TERRAFORM",
+    "REAP_SHARED_BUILD_DIR", "REAP_SHARED_CAP_GB", "REAP_LOW_FREE_GB",
+    "REAP_LOW_FREE_AGE_HOURS", "DRY_RUN"];
+
 /// A throwaway tree of checkouts, temp dirs and build output.
 struct Fixture {
     dir: TempDir,
@@ -72,6 +77,8 @@ impl Fixture {
             // Otherwise `commit` starts a detached `git maintenance`, whose lock files
             // can vanish while a test walks the tree to age it.
             .args(["-c", "maintenance.auto=false"])
+            // A global commit.gpgsign would prompt for a key passphrase.
+            .args(["-c", "commit.gpgsign=false"])
             .args(args)
             .output()
             .expect("run git")
@@ -107,6 +114,17 @@ impl Fixture {
         self
     }
 
+    /// A cargo build dir in the layout cargo uses from Rust 1.100: per-crate dirs
+    /// under `debug/build/<crate>/<hash>/`, and no `debug/deps`.
+    fn cargo_dir_new_layout(&self, rel: &str, marker: &str) -> &Self {
+        let d = self.path(rel);
+        let out = d.join("debug/build/foo/046198c1e40e5895/out");
+        fs::create_dir_all(&out).unwrap();
+        fs::write(d.join(marker), "").unwrap();
+        fs::write(out.join("libfoo.rlib"), "x").unwrap();
+        self
+    }
+
     /// A Terraform module dir with downloaded providers.
     fn tf_dir(&self, module: &str) -> &Self {
         let d = self.path(module).join(".terraform/providers");
@@ -136,11 +154,13 @@ impl Fixture {
     fn run(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
         let mut cmd = Command::new(bin());
         // Isolate from the caller's settings, and never let a run reach real dirs.
-        for var in ["REAP_ROOTS", "REAP_TEMP_ROOTS", "REAP_AGE_DAYS", "REAP_TERRAFORM",
-                    "REAP_SHARED_BUILD_DIR", "REAP_SHARED_CAP_GB", "DRY_RUN"] {
+        for var in SETTINGS {
             cmd.env_remove(var);
         }
         cmd.env("HOME", self.root())
+            // The real disk's free space must not decide a test: low-disk mode is off
+            // unless a test turns it on.
+            .env("REAP_LOW_FREE_GB", "0")
             .env("REAP_ROOTS", self.path("git"))
             .env("REAP_TEMP_ROOTS", self.path("tmp"))
             .envs(env.iter().copied())
@@ -270,6 +290,30 @@ fn r07_marker_without_deps_is_not_a_build_dir() {
     f.write("git/notes/CACHEDIR.TAG", "").age("git", 10);
     f.run(&[], &[]);
     assert!(f.exists("git/notes/CACHEDIR.TAG"));
+}
+
+#[test]
+fn r07_build_dir_in_the_new_cargo_layout_is_deleted() {
+    // Rust 1.100 stopped writing `debug/deps`; checking only for it kept every build
+    // dir from then on.
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review")
+        .cargo_dir_new_layout("git/repo-review/target", "CACHEDIR.TAG")
+        .cargo_dir_new_layout("tmp/job", ".rustc_info.json")
+        .age("git", 10).age("tmp", 10);
+    let run = f.run(&[], &[]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(!f.exists("git/repo-review/target"));
+    assert!(!f.exists("tmp/job"));
+}
+
+#[test]
+fn r07_new_layout_build_dir_written_deep_inside_is_kept() {
+    let f = Fixture::new();
+    f.cargo_dir_new_layout("tmp/job", "CACHEDIR.TAG").age("tmp", 10)
+        .age("tmp/job/debug/build/foo/046198c1e40e5895/out/libfoo.rlib", 0);
+    f.run(&[], &[]);
+    assert!(f.exists("tmp/job"));
 }
 
 #[test]
@@ -503,6 +547,90 @@ fn r11_shared_build_dir_over_the_cap_is_wiped_unless_locked() {
     unimplemented!("wiped when unlocked; kept with a 'retry next run' line when locked");
 }
 
+// --- Low disk ------------------------------------------------------------------
+
+/// Settings that put every run in low-disk mode, whatever the real disk holds.
+const LOW_DISK: (&str, &str) = ("REAP_LOW_FREE_GB", "999999999");
+
+#[test]
+fn r26_low_disk_reaps_cargo_dirs_idle_for_the_low_disk_hours() {
+    let f = Fixture::new();
+    f.cargo_dir("tmp/h4", "CACHEDIR.TAG").cargo_dir_new_layout("tmp/h8", "CACHEDIR.TAG")
+        .age_hours("tmp/h4", 4).age_hours("tmp/h8", 8);
+    let run = f.run(&[], &[LOW_DISK, ("REAP_LOW_FREE_AGE_HOURS", "6")]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(f.exists("tmp/h4"), "deleted before 6 hours");
+    assert_eq!(run.reaped(), vec![Reaped {
+        path: f.path("tmp/h8").to_str().unwrap().to_owned(),
+        reason: String::from("cargo, idle 6h+, low disk"),
+    }]);
+    assert!(run.stdout().contains("low disk (free "), "{}", run.stdout());
+}
+
+#[test]
+fn r26_low_disk_keeps_a_dir_idle_overnight_by_default() {
+    // Yesterday's work survives the night; review trees still go within a day.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/h12", "CACHEDIR.TAG").cargo_dir("tmp/h20", "CACHEDIR.TAG")
+        .age_hours("tmp/h12", 12).age_hours("tmp/h20", 20);
+    f.run(&[], &[LOW_DISK]);
+    assert!(f.exists("tmp/h12"), "deleted a dir idle only overnight");
+    assert!(!f.exists("tmp/h20"));
+}
+
+#[test]
+fn r26_with_enough_free_space_the_day_rule_applies() {
+    let f = Fixture::new();
+    f.cargo_dir("tmp/h8", "CACHEDIR.TAG").age_hours("tmp/h8", 8);
+    let run = f.run(&[], &[("REAP_LOW_FREE_GB", "0"), ("REAP_LOW_FREE_AGE_HOURS", "6")]);
+    assert_eq!(run.code(), 0, "{}", run.stdout());
+    assert!(f.exists("tmp/h8"));
+    assert!(!run.stdout().contains("low disk"), "{}", run.stdout());
+}
+
+#[test]
+fn r26_low_disk_compares_free_space_in_gib() {
+    // A df reporting exactly 100 GiB free: a 101 GB threshold is low disk, 99 is not.
+    let f = Fixture::new();
+    let df = "#!/bin/sh\necho 'Filesystem 1024-blocks Used Available Capacity Mounted on'\n\
+              echo 'fake 0 0 104857600 0% /'\n";
+    let path = path_without(&f, "df", Some(df));
+    f.cargo_dir("tmp/h8", "CACHEDIR.TAG").age_hours("tmp/h8", 8);
+    f.run(&[], &[("PATH", &path), ("REAP_LOW_FREE_GB", "99"), ("REAP_LOW_FREE_AGE_HOURS", "6")]);
+    assert!(f.exists("tmp/h8"), "99 GB threshold with 100 GiB free counted as low disk");
+    let run = f.run(&[], &[("PATH", &path), ("REAP_LOW_FREE_GB", "101"), ("REAP_LOW_FREE_AGE_HOURS", "6")]);
+    assert!(!f.exists("tmp/h8"), "101 GB threshold with 100 GiB free not counted as low disk");
+    assert!(run.stdout().contains("low disk (free 100.0 GiB < 101 GiB)"), "{}", run.stdout());
+}
+
+#[test]
+fn r26_low_disk_still_keeps_the_main_checkout_target() {
+    let f = Fixture::new();
+    f.main_checkout("repo").cargo_dir("git/repo/target", "CACHEDIR.TAG").age("git", 10);
+    f.run(&[], &[LOW_DISK]);
+    assert!(f.exists("git/repo/target"));
+}
+
+#[test]
+fn r26_low_disk_leaves_terraform_on_the_day_rule() {
+    // .terraform dirs are small once providers come from a plugin cache; low disk
+    // is about build output.
+    let f = Fixture::new();
+    f.main_checkout("repo").worktree("repo", "repo-review").tf_dir("git/repo-review/infra")
+        .age("git", 10).age_hours("git/repo-review/infra", 8);
+    f.run(&[], &[LOW_DISK, ("REAP_LOW_FREE_AGE_HOURS", "6")]);
+    assert!(f.exists("git/repo-review/infra/.terraform"));
+}
+
+#[test]
+fn r26_low_disk_hours_longer_than_the_day_rule_never_keep_more() {
+    // Low disk only ever lowers the threshold.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/d2", "CACHEDIR.TAG").age("tmp/d2", 2);
+    f.run(&[], &[LOW_DISK, ("REAP_AGE_DAYS", "1"), ("REAP_LOW_FREE_AGE_HOURS", "100")]);
+    assert!(!f.exists("tmp/d2"));
+}
+
 // --- Settings ------------------------------------------------------------------
 
 #[test]
@@ -514,6 +642,19 @@ fn r12_invalid_age_stops_before_deleting_anything() {
         let run = f.run(&[], &[("REAP_AGE_DAYS", bad)]);
         assert_eq!(run.code(), 2, "REAP_AGE_DAYS={bad}");
         assert!(f.exists("git/repo-review/target"), "REAP_AGE_DAYS={bad} deleted");
+    }
+}
+
+#[test]
+fn r12_invalid_low_disk_settings_stop_before_deleting_anything() {
+    for (var, bad) in [("REAP_LOW_FREE_AGE_HOURS", "0"), ("REAP_LOW_FREE_AGE_HOURS", "6h"),
+                       ("REAP_LOW_FREE_AGE_HOURS", "-1"), ("REAP_LOW_FREE_GB", "lots"),
+                       ("REAP_LOW_FREE_GB", "-1"), ("REAP_LOW_FREE_GB", "9999999999999")] {
+        let f = Fixture::new();
+        f.cargo_dir("tmp/job", "CACHEDIR.TAG").age("tmp", 10);
+        let run = f.run(&[], &[(var, bad)]);
+        assert_eq!(run.code(), 2, "{var}={bad}");
+        assert!(f.exists("tmp/job"), "{var}={bad} deleted");
     }
 }
 
@@ -563,6 +704,21 @@ fn r12_flag_overrides_environment_variable() {
     assert!(f.exists("tmp/job"));
     f.run(&[], &[("REAP_AGE_DAYS", "1")]);
     assert!(!f.exists("tmp/job"));
+}
+
+#[test]
+fn r12_low_disk_flags_override_environment_variables() {
+    if !testing_binary() {
+        return;
+    }
+    // The variable says low disk; the flag turns it off.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/h8", "CACHEDIR.TAG").age_hours("tmp/h8", 8);
+    f.run(&["--low-free-gb", "0"], &[LOW_DISK]);
+    assert!(f.exists("tmp/h8"), "--low-free-gb 0 ignored");
+    // The variable alone would keep an 8-hour-old dir; the flag says 6 hours.
+    f.run(&["--low-free-age-hours", "6"], &[LOW_DISK, ("REAP_LOW_FREE_AGE_HOURS", "12")]);
+    assert!(!f.exists("tmp/h8"), "--low-free-age-hours ignored");
 }
 
 #[test]
@@ -903,10 +1059,10 @@ fn r22_macos_user_temp_dir_is_searched_without_tmpdir() {
     let path = path_without(&no_rm, "rm", Some("#!/bin/sh\nexit 1\n"));
     let mut cmd = Command::new(bin());
     cmd.env("PATH", path);
-    for var in ["REAP_TEMP_ROOTS", "TMPDIR", "REAP_AGE_DAYS", "REAP_TERRAFORM",
-                "REAP_SHARED_BUILD_DIR", "REAP_SHARED_CAP_GB", "DRY_RUN"] {
+    for var in SETTINGS.iter().chain(&["TMPDIR"]).filter(|v| **v != "REAP_ROOTS") {
         cmd.env_remove(var);
     }
+    cmd.env("REAP_LOW_FREE_GB", "0");
     let run = Run(cmd.env("REAP_ROOTS", &git).arg("--dry-run").output().unwrap());
     assert_eq!(run.code(), 0, "{}", run.stdout());
     assert!(job.exists());
