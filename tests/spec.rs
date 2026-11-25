@@ -681,6 +681,21 @@ fn r12_flag_overrides_environment_variable() {
 }
 
 #[test]
+fn r12_low_disk_flags_override_environment_variables() {
+    if !testing_binary() {
+        return;
+    }
+    // The variable says low disk; the flag turns it off.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/h8", "CACHEDIR.TAG").age_hours("tmp/h8", 8);
+    f.run(&["--low-free-gb", "0"], &[LOW_DISK]);
+    assert!(f.exists("tmp/h8"), "--low-free-gb 0 ignored");
+    // The variable alone would keep an 8-hour-old dir; the flag says 6 hours.
+    f.run(&["--low-free-age-hours", "6"], &[LOW_DISK, ("REAP_LOW_FREE_AGE_HOURS", "12")]);
+    assert!(!f.exists("tmp/h8"), "--low-free-age-hours ignored");
+}
+
+#[test]
 fn r12_invalid_flag_stops_before_deleting_anything() {
     if !testing_binary() {
         return;

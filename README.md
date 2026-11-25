@@ -82,7 +82,8 @@ sed "s|__HOME__|$HOME|g" reap-build-dirs/launchd/reap-build-dirs.plist \
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/reap-build-dirs.plist
 ```
 
-It runs every hour, and once on wake if the Mac was asleep. The log is
+It runs every hour. Runs that fall due while the Mac is asleep are skipped, not caught
+up. The log is
 `~/Library/Logs/reap-build-dirs.log`. To change settings, add them under
 `EnvironmentVariables` in the plist.
 

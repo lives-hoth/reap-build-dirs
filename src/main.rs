@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
 use clap::Parser;
+use clap::builder::TypedValueParser;
 
 use crate::reap::Reaper;
 
@@ -55,9 +56,10 @@ struct Args {
     low_free_gb: u32,
 
     /// Hours without writes before a cargo build dir is deleted when the disk is low
-    #[arg(long, env = "REAP_LOW_FREE_AGE_HOURS", default_value_t = 6,
-          value_parser = clap::value_parser!(u32).range(1..=999_999_999))]
-    low_free_age_hours: u32,
+    // NonZero like age_days; bounded to match the script.
+    #[arg(long, env = "REAP_LOW_FREE_AGE_HOURS", default_value_t = NonZeroU32::new(6).unwrap(),
+          value_parser = clap::value_parser!(u32).range(1..=999_999_999).try_map(NonZeroU32::try_from))]
+    low_free_age_hours: NonZeroU32,
 
     /// Leave .terraform dirs alone [env: REAP_TERRAFORM=0]
     #[arg(long)]
