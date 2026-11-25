@@ -57,7 +57,7 @@ struct Args {
 
     /// Hours without writes before a cargo build dir is deleted when the disk is low
     // NonZero like age_days; bounded to match the script.
-    #[arg(long, env = "REAP_LOW_FREE_AGE_HOURS", default_value_t = NonZeroU32::new(6).unwrap(),
+    #[arg(long, env = "REAP_LOW_FREE_AGE_HOURS", default_value_t = NonZeroU32::new(16).unwrap(),
           value_parser = clap::value_parser!(u32).range(1..=999_999_999).try_map(NonZeroU32::try_from))]
     low_free_age_hours: NonZeroU32,
 

@@ -28,7 +28,7 @@ Environment:
                          after REAP_LOW_FREE_AGE_HOURS instead; 0 turns it off
                          (default: 150)
   REAP_LOW_FREE_AGE_HOURS  idle hours before a cargo build dir is deleted when
-                         the disk is low, at least 1  (default: 6)
+                         the disk is low, at least 1  (default: 16)
   REAP_TERRAFORM         0 to skip .terraform dirs, 1 to include them  (default: 1)
   REAP_SHARED_BUILD_DIR  a cargo build-dir shared across workspaces  (default: unset)
   REAP_SHARED_CAP_GB     size that triggers wiping it  (default: 100)
@@ -53,7 +53,7 @@ TERRAFORM=${REAP_TERRAFORM:-1}
 SHARED_DIR=${REAP_SHARED_BUILD_DIR:-}
 SHARED_CAP_GB=${REAP_SHARED_CAP_GB:-100}
 LOW_FREE_GB=${REAP_LOW_FREE_GB:-150}
-LOW_FREE_AGE_HOURS=${REAP_LOW_FREE_AGE_HOURS:-6}
+LOW_FREE_AGE_HOURS=${REAP_LOW_FREE_AGE_HOURS:-16}
 
 die() { echo "reap-build-dirs: $*" >&2; exit 2; }
 case "$TERRAFORM" in 0|1) ;; *) die "REAP_TERRAFORM must be 0 or 1 (got '$TERRAFORM')" ;; esac

@@ -43,7 +43,7 @@ is idle.
   worktree layout.
 - **Anything written in the last `REAP_AGE_DAYS` days**, including builds in progress.
   When free space is under `REAP_LOW_FREE_GB` (150 by default), a cargo build dir is
-  kept only while it was written in the last `REAP_LOW_FREE_AGE_HOURS` (6). The run
+  kept only while it was written in the last `REAP_LOW_FREE_AGE_HOURS` (16). The run
   logs `low disk (free …)` when this applies. A healthy disk keeps warm caches for days;
   a full one gives them up first.
 - **Other users' dirs.** Only dirs owned by the user running it are considered, so a
@@ -105,7 +105,7 @@ journalctl --user -u reap-build-dirs     # the log
 | `REAP_TEMP_ROOTS` | `/tmp`, `$TMPDIR`, and on macOS the per-user temp dir | Colon-separated temp dirs, searched 4 levels deep |
 | `REAP_AGE_DAYS` | `3` | Days without writes before a dir is deleted (a whole number, at least 1) |
 | `REAP_LOW_FREE_GB` | `150` | Below this much free disk, cargo build dirs go after `REAP_LOW_FREE_AGE_HOURS`; `0` turns it off |
-| `REAP_LOW_FREE_AGE_HOURS` | `6` | Hours without writes before a cargo build dir is deleted on a low disk (at least 1) |
+| `REAP_LOW_FREE_AGE_HOURS` | `16` | Hours without writes before a cargo build dir is deleted on a low disk (at least 1) |
 | `REAP_TERRAFORM` | `1` | `0` leaves `.terraform` dirs alone; any value but `0` or `1` stops the run |
 | `REAP_SHARED_BUILD_DIR` | unset | A cargo `build-dir` shared across workspaces |
 | `REAP_SHARED_CAP_GB` | `100` | Size at which the shared build-dir is wiped |

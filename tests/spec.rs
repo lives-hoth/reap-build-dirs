@@ -568,6 +568,17 @@ fn r26_low_disk_reaps_cargo_dirs_idle_for_the_low_disk_hours() {
 }
 
 #[test]
+fn r26_low_disk_keeps_a_dir_idle_overnight_by_default() {
+    // Yesterday's work survives the night; review trees still go within a day.
+    let f = Fixture::new();
+    f.cargo_dir("tmp/h12", "CACHEDIR.TAG").cargo_dir("tmp/h20", "CACHEDIR.TAG")
+        .age_hours("tmp/h12", 12).age_hours("tmp/h20", 20);
+    f.run(&[], &[LOW_DISK]);
+    assert!(f.exists("tmp/h12"), "deleted a dir idle only overnight");
+    assert!(!f.exists("tmp/h20"));
+}
+
+#[test]
 fn r26_with_enough_free_space_the_day_rule_applies() {
     let f = Fixture::new();
     f.cargo_dir("tmp/h8", "CACHEDIR.TAG").age_hours("tmp/h8", 8);
