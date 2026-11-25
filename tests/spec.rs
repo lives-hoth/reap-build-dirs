@@ -578,6 +578,21 @@ fn r26_with_enough_free_space_the_day_rule_applies() {
 }
 
 #[test]
+fn r26_low_disk_compares_free_space_in_gib() {
+    // A df reporting exactly 100 GiB free: a 101 GB threshold is low disk, 99 is not.
+    let f = Fixture::new();
+    let df = "#!/bin/sh\necho 'Filesystem 1024-blocks Used Available Capacity Mounted on'\n\
+              echo 'fake 0 0 104857600 0% /'\n";
+    let path = path_without(&f, "df", Some(df));
+    f.cargo_dir("tmp/h8", "CACHEDIR.TAG").age_hours("tmp/h8", 8);
+    f.run(&[], &[("PATH", &path), ("REAP_LOW_FREE_GB", "99"), ("REAP_LOW_FREE_AGE_HOURS", "6")]);
+    assert!(f.exists("tmp/h8"), "99 GB threshold with 100 GiB free counted as low disk");
+    let run = f.run(&[], &[("PATH", &path), ("REAP_LOW_FREE_GB", "101"), ("REAP_LOW_FREE_AGE_HOURS", "6")]);
+    assert!(!f.exists("tmp/h8"), "101 GB threshold with 100 GiB free not counted as low disk");
+    assert!(run.stdout().contains("low disk (free 100.0 GiB < 101 GiB)"), "{}", run.stdout());
+}
+
+#[test]
 fn r26_low_disk_still_keeps_the_main_checkout_target() {
     let f = Fixture::new();
     f.main_checkout("repo").cargo_dir("git/repo/target", "CACHEDIR.TAG").age("git", 10);
